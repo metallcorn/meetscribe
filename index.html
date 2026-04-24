@@ -1146,6 +1146,148 @@
       margin-left: auto;
     }
     #chat-clear-btn:hover { color: var(--danger); border-color: var(--danger); }
+
+    /* ── ONBOARDING MODAL ── */
+    #ob-modal {
+      position: fixed; inset: 0; z-index: 200;
+      background: rgba(0,0,0,0.8); backdrop-filter: blur(6px);
+      display: flex; align-items: center; justify-content: center;
+      animation: overlayBgIn 0.2s ease;
+    }
+    #ob-modal.closing { animation: overlayBgOut 0.18s ease forwards; pointer-events: none; }
+    #ob-card {
+      background: var(--bg2); border: 1px solid var(--border);
+      border-radius: 16px; width: 500px; max-width: 94vw; max-height: 90vh;
+      display: flex; flex-direction: column; overflow: hidden;
+      box-shadow: 0 24px 80px rgba(0,0,0,0.6);
+      animation: overlayContentIn 0.28s cubic-bezier(0.34, 1.2, 0.64, 1);
+    }
+    #ob-modal.closing #ob-card { animation: overlayContentOut 0.16s ease forwards; }
+    .ob-header {
+      padding: 14px 18px 0; display: flex; justify-content: flex-end; flex-shrink: 0;
+    }
+    .ob-close-btn {
+      background: transparent; border: none; color: var(--dim);
+      font-size: 16px; cursor: pointer; padding: 2px 7px; border-radius: 6px; line-height: 1;
+    }
+    .ob-close-btn:hover { color: var(--text); background: var(--bg3); }
+    .ob-body {
+      flex: 1; overflow-y: auto; padding: 6px 28px 20px;
+      display: flex; flex-direction: column;
+    }
+    .ob-title {
+      font-size: 20px; font-weight: 700; text-align: center;
+      margin-bottom: 7px; line-height: 1.25;
+    }
+    .ob-sub {
+      font-size: 13px; color: var(--dim); text-align: center;
+      line-height: 1.6; margin-bottom: 18px;
+    }
+    .ob-step { display: none; flex-direction: column; }
+    .ob-step.active { display: flex; }
+
+    /* Step 1 — feature cards */
+    .ob-features { display: flex; flex-direction: column; gap: 9px; margin-bottom: 6px; }
+    .ob-feat {
+      display: flex; gap: 12px; align-items: flex-start;
+      background: var(--bg3); border: 1px solid var(--border);
+      border-radius: 10px; padding: 11px 13px;
+    }
+    .ob-feat-icon { font-size: 18px; flex-shrink: 0; margin-top: 1px; }
+    .ob-feat-title { font-weight: 600; font-size: 13px; margin-bottom: 2px; }
+    .ob-feat-sub { font-size: 12px; color: var(--dim); line-height: 1.45; }
+
+    /* Step 2 — folder */
+    .ob-filetree {
+      background: var(--bg3); border: 1px solid var(--border); border-radius: 10px;
+      padding: 12px 16px; font-family: 'JetBrains Mono', 'Consolas', monospace;
+      font-size: 12px; color: var(--dim); line-height: 1.75; margin-bottom: 16px;
+      white-space: pre;
+    }
+    .ob-folder-result {
+      display: none; align-items: center; gap: 10px;
+      background: rgba(16,185,129,0.1); border: 1px solid rgba(16,185,129,0.3);
+      border-radius: 10px; padding: 10px 14px; margin-bottom: 14px; font-size: 13px;
+    }
+    .ob-folder-result.visible { display: flex; }
+    .ob-folder-result-icon { font-size: 18px; }
+    .ob-folder-result-name { font-weight: 600; color: var(--success); }
+    .ob-folder-result-sub { font-size: 11px; color: var(--dim); margin-top: 1px; }
+
+    /* Step 3 — engine cards */
+    .ob-engines { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
+    .ob-engine-card {
+      border: 1px solid var(--border); border-radius: 10px; padding: 11px 12px;
+      cursor: pointer; transition: border-color 0.15s, background 0.12s;
+      display: flex; flex-direction: column; gap: 3px;
+    }
+    .ob-engine-card:hover { border-color: var(--dim); background: var(--bg3); }
+    .ob-engine-card.selected { border-color: var(--accent); background: rgba(139,92,246,0.07); }
+    .ob-engine-name { font-weight: 600; font-size: 13px; }
+    .ob-engine-badge {
+      display: inline-block; font-size: 10px; padding: 1px 6px;
+      border-radius: 4px; margin-bottom: 2px; width: fit-content;
+    }
+    .ob-badge-free { background: rgba(16,185,129,0.15); color: var(--success); }
+    .ob-badge-paid { background: rgba(139,92,246,0.15); color: var(--accent2); }
+    .ob-engine-desc { font-size: 11px; color: var(--dim); line-height: 1.4; }
+    .ob-key-row {
+      display: flex; gap: 8px; align-items: center;
+      background: var(--bg3); border: 1px solid var(--border);
+      border-radius: 10px; padding: 8px 12px; margin-bottom: 5px;
+    }
+    .ob-key-row input {
+      flex: 1; background: transparent; border: none; color: var(--text);
+      font-size: 13px; font-family: inherit; outline: none;
+    }
+    .ob-key-row input::placeholder { color: var(--dim); }
+    .ob-key-saved { font-size: 11px; color: var(--success); display: none; margin-bottom: 10px; }
+    .ob-key-saved.visible { display: block; }
+
+    /* Step 4 — AI features */
+    .ob-ai-features { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+    .ob-ai-feat {
+      display: flex; gap: 10px; align-items: center; font-size: 13px;
+      background: var(--bg3); border: 1px solid var(--border);
+      border-radius: 8px; padding: 9px 12px;
+    }
+    .ob-ai-feat-icon { font-size: 15px; flex-shrink: 0; }
+    .ob-ai-prov-row {
+      display: flex; gap: 8px; align-items: center; margin-bottom: 8px;
+    }
+    .ob-ai-prov-label { font-size: 12px; color: var(--dim); flex-shrink: 0; }
+
+    /* Step 5 — ready */
+    .ob-steps-guide { display: flex; flex-direction: column; gap: 9px; margin-bottom: 16px; }
+    .ob-guide-step {
+      display: flex; align-items: flex-start; gap: 12px;
+      background: var(--bg3); border: 1px solid var(--border);
+      border-radius: 10px; padding: 10px 13px;
+    }
+    .ob-guide-num {
+      width: 22px; height: 22px; border-radius: 50%;
+      background: var(--accent); color: #fff; font-size: 11px; font-weight: 700;
+      display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px;
+    }
+    .ob-guide-text { font-size: 13px; line-height: 1.5; }
+    .ob-warn-box {
+      background: rgba(244,63,94,0.07); border: 1px solid rgba(244,63,94,0.25);
+      border-radius: 10px; padding: 10px 13px; font-size: 12px;
+      color: var(--text); line-height: 1.5; margin-bottom: 6px;
+    }
+
+    /* Navigation */
+    .ob-nav {
+      display: flex; gap: 8px; align-items: center;
+      padding: 10px 22px 18px; flex-shrink: 0; border-top: 1px solid var(--border);
+    }
+    .ob-dots { display: flex; gap: 6px; margin: 0 auto; }
+    .ob-dot {
+      width: 6px; height: 6px; border-radius: 50%; background: var(--border);
+      transition: background 0.2s, transform 0.2s;
+    }
+    .ob-dot.active { background: var(--accent); transform: scale(1.4); }
+    .ob-dot.done { background: var(--dim); }
   </style>
   <script src="translations.js"></script>
 </head>
@@ -1582,6 +1724,8 @@ function applyTranslations() {
   document.getElementById('sessions-search').placeholder = t('sessions_search_placeholder');
 
   // Error banner close button — rendered dynamically, handled in showError()
+
+  applyOnboardingTranslations();
 }
 
 // ─────────────────────────────────────────────
@@ -5938,6 +6082,7 @@ function bindEvents() {
   });
 
   document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && $('ob-modal').style.display !== 'none') { hideOnboarding(); return; }
     if (e.key === 'Escape' && $('settings-drawer').classList.contains('open')) { closeDrawer(); return; }
     if (e.key === 'Escape' && S.chat.active) { closeChat(); return; }
     if (!e.altKey) return;
@@ -5965,12 +6110,17 @@ async function init() {
 
   loadApiKey();
   bindEvents();
+  initOnboarding();
   initScrollBehavior();
 
   try {
     const h = await dbLoad();
     if (h) {
       S.dirHandle = h;
+      // Mark returning users as onboarded so modal never appears for them
+      if (!localStorage.getItem('meetscribe_onboarding_done')) {
+        localStorage.setItem('meetscribe_onboarding_done', '1');
+      }
       const perm = await h.queryPermission({ mode: 'readwrite' });
       if (perm === 'granted') {
         applyFolderState();
@@ -5986,7 +6136,8 @@ async function init() {
         $('btn-start').disabled = true;
       }
     } else {
-      applyFolderState();  // → onboarding
+      applyFolderState();  // → old inline onboarding (fallback)
+      if (!localStorage.getItem('meetscribe_onboarding_done')) showOnboarding();
     }
   } catch(e) {
     console.error('init error', e);
@@ -6488,6 +6639,202 @@ async function bindChatEvents() {
 
 document.addEventListener('DOMContentLoaded', init);
 
+// ─────────────────────────────────────────────
+// ONBOARDING MODAL
+// ─────────────────────────────────────────────
+let _obStep = 1;
+const OB_TOTAL = 5;
+
+function showOnboarding() {
+  _obStep = 1;
+  const modal = $('ob-modal');
+  modal.style.display = 'flex';
+  modal.classList.remove('closing');
+  _obRender();
+}
+
+function hideOnboarding() {
+  localStorage.setItem('meetscribe_onboarding_done', '1');
+  const modal = $('ob-modal');
+  modal.classList.add('closing');
+  setTimeout(() => { modal.style.display = 'none'; modal.classList.remove('closing'); }, 200);
+}
+
+function _obRender() {
+  document.querySelectorAll('.ob-step').forEach(s => {
+    s.classList.toggle('active', +s.dataset.step === _obStep);
+  });
+  document.querySelectorAll('.ob-dot').forEach(d => {
+    const n = +d.dataset.dot;
+    d.classList.toggle('active', n === _obStep);
+    d.classList.toggle('done', n < _obStep);
+  });
+  $('ob-btn-back').style.visibility = _obStep === 1 ? 'hidden' : 'visible';
+  _obRenderNavText();
+  if (_obStep === 2) _obUpdateFolderState();
+  if (_obStep === 3) {
+    const cur = $('live-engine').value;
+    document.querySelectorAll('.ob-engine-card').forEach(c => {
+      c.classList.toggle('selected', c.dataset.engine === cur);
+    });
+    _obUpdateEngineKeyRow(cur);
+  }
+  if (_obStep === 4) {
+    const prov = $('rest-provider').value;
+    $('ob-rest-provider').value = prov;
+    const key = localStorage.getItem('meetscribe_rest_key_' + prov) || '';
+    $('ob-rest-key').value = key;
+    $('ob-rest-key-saved').classList.toggle('visible', !!key);
+  }
+}
+
+function _obRenderNavText() {
+  const nextBtn = $('ob-btn-next');
+  if (_obStep === 1) nextBtn.textContent = t('ob_btn_start');
+  else if (_obStep === OB_TOTAL) nextBtn.textContent = t('ob_btn_done');
+  else nextBtn.textContent = t('ob_btn_next');
+}
+
+function _obUpdateFolderState() {
+  const hasFold = !!S.dirHandle;
+  $('ob-folder-result').classList.toggle('visible', hasFold);
+  $('ob-btn-pick').style.display = hasFold ? 'none' : '';
+  $('ob-skip-folder').style.display = hasFold ? 'none' : '';
+  if (hasFold) {
+    $('ob-folder-name').textContent = S.dirHandle.name;
+    $('ob-folder-sub').textContent = t('ob_folder_saved');
+  }
+}
+
+function _obUpdateEngineKeyRow(engine) {
+  const needsKey = engine !== 'webspeech';
+  $('ob-engine-key-row').style.display = needsKey ? 'flex' : 'none';
+  $('ob-skip-engine').style.display = needsKey ? '' : 'none';
+  const placeholders = {
+    gemini: t('settings_gemini_key_placeholder'),
+    deepgram: t('settings_deepgram_live_key_placeholder'),
+    groq: t('settings_groq_key_placeholder'),
+  };
+  $('ob-engine-key').placeholder = placeholders[engine] || 'API key...';
+  const lsKey = engine === 'gemini' ? 'meetscribe_gemini_key' :
+                engine === 'deepgram' ? 'meetscribe_deepgram_live_key' :
+                engine === 'groq' ? 'meetscribe_groq_key' : null;
+  const existing = lsKey ? localStorage.getItem(lsKey) || '' : '';
+  $('ob-engine-key').value = existing;
+  $('ob-engine-key-saved').classList.toggle('visible', !!existing);
+}
+
+function applyOnboardingTranslations() {
+  if (!$('ob-modal')) return;
+  $('ob-title-1').textContent = t('ob_title_1');
+  $('ob-sub-1').textContent = t('ob_sub_1');
+  $('ob-f1-title').textContent = t('ob_f1_title');
+  $('ob-f1-sub').textContent = t('ob_f1_sub');
+  $('ob-f2-title').textContent = t('ob_f2_title');
+  $('ob-f2-sub').textContent = t('ob_f2_sub');
+  $('ob-f3-title').textContent = t('ob_f3_title');
+  $('ob-f3-sub').textContent = t('ob_f3_sub');
+  $('ob-title-2').textContent = t('ob_title_2');
+  $('ob-sub-2').textContent = t('ob_sub_2');
+  $('ob-filetree').innerHTML = t('ob_filetree');
+  $('ob-btn-pick').textContent = t('ob_btn_pick_folder');
+  $('ob-skip-folder').textContent = t('ob_skip');
+  $('ob-title-3').textContent = t('ob_title_3');
+  $('ob-sub-3').textContent = t('ob_sub_3');
+  $('ob-badge-dg').textContent = t('ob_badge_paid');
+  $('ob-desc-dg').textContent = t('ob_desc_dg');
+  $('ob-badge-groq').textContent = t('ob_badge_paid');
+  $('ob-desc-groq').textContent = t('ob_desc_groq');
+  $('ob-badge-gemini').textContent = t('ob_badge_paid');
+  $('ob-desc-gemini').textContent = t('ob_desc_gemini');
+  $('ob-badge-ws').textContent = t('ob_badge_free');
+  $('ob-desc-ws').textContent = t('ob_desc_ws');
+  $('ob-save-engine-key').textContent = t('settings_save_btn');
+  $('ob-skip-engine').textContent = t('ob_skip');
+  $('ob-engine-key-saved').textContent = t('ob_key_saved');
+  $('ob-title-4').textContent = t('ob_title_4');
+  $('ob-sub-4').textContent = t('ob_sub_4');
+  $('ob-ai-f1').textContent = t('ob_ai_f1');
+  $('ob-ai-f2').textContent = t('ob_ai_f2');
+  $('ob-ai-f3').textContent = t('ob_ai_f3');
+  $('ob-ai-provider-label').textContent = t('ob_ai_provider');
+  $('ob-save-rest-key').textContent = t('settings_save_btn');
+  $('ob-rest-key-saved').textContent = t('ob_key_saved');
+  $('ob-title-5').textContent = t('ob_title_5');
+  $('ob-sub-5').textContent = t('ob_sub_5');
+  $('ob-g1').innerHTML = t('ob_g1');
+  $('ob-g2').textContent = t('ob_g2');
+  $('ob-g3').innerHTML = t('ob_g3');
+  $('ob-warn').innerHTML = t('ob_warn');
+  $('ob-btn-back').textContent = t('ob_btn_back');
+  $('ob-close').title = t('ob_close_title');
+  _obRenderNavText();
+}
+
+function initOnboarding() {
+  $('ob-close').addEventListener('click', hideOnboarding);
+  $('ob-modal').addEventListener('click', e => { if (e.target === $('ob-modal')) hideOnboarding(); });
+
+  $('ob-btn-back').addEventListener('click', () => {
+    if (_obStep > 1) { _obStep--; _obRender(); }
+  });
+  $('ob-btn-next').addEventListener('click', () => {
+    if (_obStep < OB_TOTAL) { _obStep++; _obRender(); }
+    else hideOnboarding();
+  });
+
+  $('ob-btn-pick').addEventListener('click', async () => {
+    await pickFolder();
+    _obUpdateFolderState();
+    if (S.dirHandle) setTimeout(() => { _obStep++; _obRender(); }, 600);
+  });
+  $('ob-skip-folder').addEventListener('click', () => { _obStep++; _obRender(); });
+
+  document.querySelectorAll('.ob-engine-card').forEach(card => {
+    card.addEventListener('click', () => {
+      const engine = card.dataset.engine;
+      document.querySelectorAll('.ob-engine-card').forEach(c => c.classList.remove('selected'));
+      card.classList.add('selected');
+      $('live-engine').value = engine;
+      updateLiveEngineUI(engine);
+      _obUpdateEngineKeyRow(engine);
+    });
+  });
+
+  $('ob-save-engine-key').addEventListener('click', () => {
+    const engine = document.querySelector('.ob-engine-card.selected')?.dataset.engine;
+    const key = $('ob-engine-key').value.trim();
+    if (!key || !engine) return;
+    if (engine === 'gemini') { localStorage.setItem('meetscribe_gemini_key', key); $('api-key-input').value = key; S.apiKey = key; }
+    else if (engine === 'deepgram') { localStorage.setItem('meetscribe_deepgram_live_key', key); $('deepgram-live-key-input').value = key; }
+    else if (engine === 'groq') { localStorage.setItem('meetscribe_groq_key', key); $('groq-key-input').value = key; }
+    $('ob-engine-key-saved').classList.add('visible');
+    setTimeout(() => { _obStep++; _obRender(); }, 600);
+  });
+  $('ob-skip-engine').addEventListener('click', () => { _obStep++; _obRender(); });
+
+  $('ob-rest-provider').addEventListener('change', () => {
+    const prov = $('ob-rest-provider').value;
+    $('rest-provider').value = prov;
+    S.restProvider = prov;
+    localStorage.setItem('meetscribe_rest_provider', prov);
+    const key = localStorage.getItem('meetscribe_rest_key_' + prov) || '';
+    $('ob-rest-key').value = key;
+    $('ob-rest-key-saved').classList.toggle('visible', !!key);
+  });
+
+  $('ob-save-rest-key').addEventListener('click', () => {
+    const prov = $('ob-rest-provider').value;
+    const key = $('ob-rest-key').value.trim();
+    if (!key) return;
+    localStorage.setItem('meetscribe_rest_key_' + prov, key);
+    $('rest-key-input').value = key;
+    S.restKey = key;
+    $('ob-rest-key-saved').classList.add('visible');
+    setTimeout(() => { _obStep++; _obRender(); }, 600);
+  });
+}
+
 window.addEventListener('beforeunload', e => {
   if (S.recording) {
     e.preventDefault();
@@ -6508,5 +6855,157 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 </script>
+
+<!-- ONBOARDING MODAL -->
+<div id="ob-modal" style="display:none">
+  <div id="ob-card">
+    <div class="ob-header">
+      <button class="ob-close-btn" id="ob-close" title="">✕</button>
+    </div>
+    <div class="ob-body">
+
+      <!-- Step 1: Welcome -->
+      <div class="ob-step active" data-step="1">
+        <div class="ob-title" id="ob-title-1"></div>
+        <div class="ob-sub" id="ob-sub-1"></div>
+        <div class="ob-features">
+          <div class="ob-feat">
+            <div class="ob-feat-icon">🔒</div>
+            <div class="ob-feat-text">
+              <div class="ob-feat-title" id="ob-f1-title"></div>
+              <div class="ob-feat-sub" id="ob-f1-sub"></div>
+            </div>
+          </div>
+          <div class="ob-feat">
+            <div class="ob-feat-icon">⚡</div>
+            <div class="ob-feat-text">
+              <div class="ob-feat-title" id="ob-f2-title"></div>
+              <div class="ob-feat-sub" id="ob-f2-sub"></div>
+            </div>
+          </div>
+          <div class="ob-feat">
+            <div class="ob-feat-icon">✨</div>
+            <div class="ob-feat-text">
+              <div class="ob-feat-title" id="ob-f3-title"></div>
+              <div class="ob-feat-sub" id="ob-f3-sub"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 2: Choose folder -->
+      <div class="ob-step" data-step="2">
+        <div class="ob-title" id="ob-title-2"></div>
+        <div class="ob-sub" id="ob-sub-2"></div>
+        <div class="ob-filetree" id="ob-filetree"></div>
+        <div class="ob-folder-result" id="ob-folder-result">
+          <div class="ob-folder-result-icon">✅</div>
+          <div>
+            <div class="ob-folder-result-name" id="ob-folder-name"></div>
+            <div class="ob-folder-result-sub" id="ob-folder-sub"></div>
+          </div>
+        </div>
+        <button class="primary" id="ob-btn-pick" style="align-self:center;padding:10px 28px;font-size:14px;margin-bottom:6px"></button>
+        <div style="text-align:center;margin-top:4px">
+          <button class="ghost" id="ob-skip-folder" style="font-size:12px;color:var(--dim)"></button>
+        </div>
+      </div>
+
+      <!-- Step 3: Transcription engine -->
+      <div class="ob-step" data-step="3">
+        <div class="ob-title" id="ob-title-3"></div>
+        <div class="ob-sub" id="ob-sub-3"></div>
+        <div class="ob-engines">
+          <div class="ob-engine-card" data-engine="deepgram">
+            <span class="ob-engine-badge ob-badge-paid" id="ob-badge-dg"></span>
+            <div class="ob-engine-name">Deepgram</div>
+            <div class="ob-engine-desc" id="ob-desc-dg"></div>
+          </div>
+          <div class="ob-engine-card" data-engine="groq">
+            <span class="ob-engine-badge ob-badge-paid" id="ob-badge-groq"></span>
+            <div class="ob-engine-name">Groq / Whisper</div>
+            <div class="ob-engine-desc" id="ob-desc-groq"></div>
+          </div>
+          <div class="ob-engine-card" data-engine="gemini">
+            <span class="ob-engine-badge ob-badge-paid" id="ob-badge-gemini"></span>
+            <div class="ob-engine-name">Gemini Live</div>
+            <div class="ob-engine-desc" id="ob-desc-gemini"></div>
+          </div>
+          <div class="ob-engine-card" data-engine="webspeech">
+            <span class="ob-engine-badge ob-badge-free" id="ob-badge-ws"></span>
+            <div class="ob-engine-name">Web Speech</div>
+            <div class="ob-engine-desc" id="ob-desc-ws"></div>
+          </div>
+        </div>
+        <div class="ob-key-row" id="ob-engine-key-row" style="display:none">
+          <input type="password" id="ob-engine-key" autocomplete="off">
+          <button class="primary" id="ob-save-engine-key" style="font-size:12px;padding:4px 10px;flex-shrink:0"></button>
+        </div>
+        <div class="ob-key-saved" id="ob-engine-key-saved"></div>
+        <div style="text-align:center;margin-top:6px">
+          <button class="ghost" id="ob-skip-engine" style="font-size:12px;color:var(--dim)"></button>
+        </div>
+      </div>
+
+      <!-- Step 4: AI features -->
+      <div class="ob-step" data-step="4">
+        <div class="ob-title" id="ob-title-4"></div>
+        <div class="ob-sub" id="ob-sub-4"></div>
+        <div class="ob-ai-features">
+          <div class="ob-ai-feat"><div class="ob-ai-feat-icon">✨</div><span id="ob-ai-f1"></span></div>
+          <div class="ob-ai-feat"><div class="ob-ai-feat-icon">💬</div><span id="ob-ai-f2"></span></div>
+          <div class="ob-ai-feat"><div class="ob-ai-feat-icon">✏️</div><span id="ob-ai-f3"></span></div>
+        </div>
+        <div class="ob-ai-prov-row">
+          <span class="ob-ai-prov-label" id="ob-ai-provider-label"></span>
+          <select id="ob-rest-provider" style="flex:1">
+            <option value="gemini">Gemini</option>
+            <option value="openai">OpenAI</option>
+            <option value="mistral">Mistral</option>
+            <option value="custom">Custom URL</option>
+          </select>
+        </div>
+        <div class="ob-key-row">
+          <input type="password" id="ob-rest-key" autocomplete="off" placeholder="API key...">
+          <button class="primary" id="ob-save-rest-key" style="font-size:12px;padding:4px 10px;flex-shrink:0"></button>
+        </div>
+        <div class="ob-key-saved" id="ob-rest-key-saved"></div>
+      </div>
+
+      <!-- Step 5: Ready -->
+      <div class="ob-step" data-step="5">
+        <div class="ob-title" id="ob-title-5"></div>
+        <div class="ob-sub" id="ob-sub-5"></div>
+        <div class="ob-steps-guide">
+          <div class="ob-guide-step">
+            <div class="ob-guide-num">1</div>
+            <div class="ob-guide-text" id="ob-g1"></div>
+          </div>
+          <div class="ob-guide-step">
+            <div class="ob-guide-num">2</div>
+            <div class="ob-guide-text" id="ob-g2"></div>
+          </div>
+          <div class="ob-guide-step">
+            <div class="ob-guide-num">3</div>
+            <div class="ob-guide-text" id="ob-g3"></div>
+          </div>
+        </div>
+        <div class="ob-warn-box" id="ob-warn"></div>
+      </div>
+
+    </div>
+    <div class="ob-nav">
+      <button class="ghost" id="ob-btn-back" style="font-size:13px;padding:7px 14px;visibility:hidden"></button>
+      <div class="ob-dots">
+        <div class="ob-dot active" data-dot="1"></div>
+        <div class="ob-dot" data-dot="2"></div>
+        <div class="ob-dot" data-dot="3"></div>
+        <div class="ob-dot" data-dot="4"></div>
+        <div class="ob-dot" data-dot="5"></div>
+      </div>
+      <button class="primary" id="ob-btn-next" style="font-size:13px;padding:7px 16px"></button>
+    </div>
+  </div>
+</div>
 </body>
 </html>
