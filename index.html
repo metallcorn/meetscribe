@@ -2005,29 +2005,36 @@ function updateLiveEngineUI(engine) {
 
 function saveApiKey() {
   const v = $('api-key-input').value.trim();
-  if (!v) { showError(t('error_enter_api_key')); return; }
   S.apiKey = v;
-  localStorage.setItem('meetscribe_gemini_key', v);
+  if (v) localStorage.setItem('meetscribe_gemini_key', v);
+  else localStorage.removeItem('meetscribe_gemini_key');
   refreshStartBtn();
   const btn = $('btn-save-key');
   const orig = btn.textContent;
-  btn.textContent = '✅'; btn.disabled = true;
+  btn.textContent = v ? '✅' : '🗑'; btn.disabled = true;
   setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2000);
 }
 
 async function saveRestKey() {
   const v = $('rest-key-input').value.trim();
-  if (!v) { showError(t('error_enter_api_key')); return; }
   S.restKey = v;
   S.restProvider = $('rest-provider').value;
   S.restCustomUrl = $('rest-url-input').value.trim();
-  localStorage.setItem('meetscribe_rest_key_' + S.restProvider, v);
+  if (v) localStorage.setItem('meetscribe_rest_key_' + S.restProvider, v);
+  else localStorage.removeItem('meetscribe_rest_key_' + S.restProvider);
   localStorage.setItem('meetscribe_rest_provider', S.restProvider);
   localStorage.setItem('meetscribe_rest_url', S.restCustomUrl);
   S.geminiModels = null;
 
   const btn = $('btn-save-rest-key');
   const orig = btn.textContent;
+
+  if (!v) {
+    btn.textContent = '🗑'; btn.disabled = true;
+    setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2000);
+    return;
+  }
+
   btn.textContent = '...';
   btn.disabled = true;
   try {
@@ -2044,35 +2051,35 @@ async function saveRestKey() {
 
 function saveDeepgramKey() {
   const v = $('deepgram-key-input').value.trim();
-  if (!v) { showError(t('error_enter_deepgram_key')); return; }
-  localStorage.setItem('meetscribe_deepgram_key', v);
+  if (v) localStorage.setItem('meetscribe_deepgram_key', v);
+  else localStorage.removeItem('meetscribe_deepgram_key');
   S.dgKeyValidated = false;
   const btn = $('btn-save-deepgram-key');
   const orig = btn.textContent;
-  btn.textContent = '✅';
+  btn.textContent = v ? '✅' : '🗑';
   btn.disabled = true;
   setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2000);
 }
 
 function saveDeepgramLiveKey() {
   const v = $('deepgram-live-key-input').value.trim();
-  if (!v) { showError(t('error_enter_deepgram_live_key')); return; }
-  localStorage.setItem('meetscribe_deepgram_live_key', v);
+  if (v) localStorage.setItem('meetscribe_deepgram_live_key', v);
+  else localStorage.removeItem('meetscribe_deepgram_live_key');
   S.dgKeyValidated = false;
   const btn = $('btn-save-deepgram-live-key');
   const orig = btn.textContent;
-  btn.textContent = '✅';
+  btn.textContent = v ? '✅' : '🗑';
   btn.disabled = true;
   setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2000);
 }
 
 function saveGroqKey() {
   const v = $('groq-key-input').value.trim();
-  if (!v) { showError(t('error_enter_groq_key')); return; }
-  localStorage.setItem('meetscribe_groq_key', v);
+  if (v) localStorage.setItem('meetscribe_groq_key', v);
+  else localStorage.removeItem('meetscribe_groq_key');
   const btn = $('btn-save-groq-key');
   const orig = btn.textContent;
-  btn.textContent = '✅';
+  btn.textContent = v ? '✅' : '🗑';
   btn.disabled = true;
   setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2000);
 }
