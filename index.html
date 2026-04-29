@@ -1329,6 +1329,7 @@
           <option value="deepgram">Deepgram Live</option>
           <option value="groq">Groq Whisper</option>
           <option value="webspeech">Web Speech API (только мик)</option>
+          <option value="none">Без транскрипции</option>
         </select>
       </div>
       <div class="drawer-row" id="live-engine-gemini-row">
@@ -1377,13 +1378,37 @@
       </div>
     </div>
 
-    <div class="drawer-section">
-      <div class="drawer-section-title">Deepgram (AI транскрипция файлов)</div>
+    <div class="drawer-section" id="offline-transcribe-section">
+      <div class="drawer-section-title">Офлайн AI транскрипция (🎙)</div>
       <div class="drawer-row">
+        <span class="drawer-label" style="min-width:64px">Deepgram</span>
         <input type="password" id="deepgram-key-input" placeholder="Deepgram API ключ" autocomplete="off" style="flex:1">
         <button id="btn-save-deepgram-key" class="primary" style="font-size:12px;padding:4px 10px;flex-shrink:0">Сохранить</button>
       </div>
-      <div class="drawer-hint">Используется кнопкой 🎙 для постфактум-транскрибации с диаризацией (разделение по спикерам). Если не задан — используется Gemini.</div>
+      <div class="drawer-row">
+        <span class="drawer-label" style="min-width:64px">Groq</span>
+        <input type="password" id="groq-offline-key-input" placeholder="Groq API ключ" autocomplete="off" style="flex:1">
+        <button id="btn-save-groq-offline-key" class="primary" style="font-size:12px;padding:4px 10px;flex-shrink:0">Сохранить</button>
+      </div>
+      <div class="drawer-row">
+        <span class="drawer-label" style="min-width:64px">Gemini</span>
+        <input type="password" id="gemini-offline-key-input" placeholder="Gemini API ключ" autocomplete="off" style="flex:1">
+        <button id="btn-save-gemini-offline-key" class="primary" style="font-size:12px;padding:4px 10px;flex-shrink:0">Сохранить</button>
+      </div>
+      <div class="drawer-row">
+        <span class="drawer-label" id="offline-lang-label" style="min-width:64px">Язык</span>
+        <select id="offline-lang" style="flex:1">
+          <option value="">авто</option>
+          <option value="ru">Русский</option>
+          <option value="en">English</option>
+          <option value="de">Deutsch</option>
+          <option value="es">Español</option>
+          <option value="fr">Français</option>
+          <option value="zh">中文</option>
+          <option value="ja">日本語</option>
+        </select>
+      </div>
+      <div class="drawer-hint" id="offline-transcribe-hint">Нажмите 🎙 у любой сессии — появится пикер с доступными движками.</div>
     </div>
 
     <div class="drawer-section" id="bg-section" style="display:none">
@@ -1618,10 +1643,11 @@ function applyTranslations() {
   document.querySelector('#settings-drawer .drawer-section:nth-child(2) .drawer-section-title').textContent = t('settings_live_section');
   document.querySelector('label[for="live-engine"] .drawer-label, #settings-drawer .drawer-section:nth-child(2) .drawer-row:nth-child(2) .drawer-label').textContent = t('settings_engine_label');
   document.querySelector('#live-engine option[value="webspeech"]').textContent = t('settings_webspeech_option');
+  document.querySelector('#live-engine option[value="none"]').textContent = t('settings_none_option');
   document.getElementById('api-key-input').placeholder = t('settings_gemini_key_placeholder');
   document.getElementById('deepgram-live-key-input').placeholder = t('settings_deepgram_live_key_placeholder');
   document.getElementById('groq-key-input').placeholder = t('settings_groq_key_placeholder');
-  document.querySelectorAll('#btn-save-key, #btn-save-deepgram-live-key, #btn-save-groq-key, #btn-save-rest-key, #btn-save-deepgram-key').forEach(b => {
+  document.querySelectorAll('#btn-save-key, #btn-save-deepgram-live-key, #btn-save-groq-key, #btn-save-rest-key, #btn-save-deepgram-key, #btn-save-groq-offline-key, #btn-save-gemini-offline-key').forEach(b => {
     if (!b._origSet) b.textContent = t('settings_save_btn');
   });
   document.querySelector('#echo-controls .drawer-label').textContent = t('settings_echo_threshold');
@@ -1636,14 +1662,16 @@ function applyTranslations() {
     const keyIn = sumSection.querySelector('input[type="password"]');
     if (keyIn) keyIn.placeholder = t('settings_api_key_placeholder');
   }
-  // Deepgram files section
-  const dgSection = document.querySelector('#settings-drawer .drawer-section:nth-child(4)');
-  if (dgSection) {
-    dgSection.querySelector('.drawer-section-title').textContent = t('settings_deepgram_files_section');
-    const keyIn = dgSection.querySelector('input[type="password"]');
-    if (keyIn) keyIn.placeholder = t('settings_deepgram_key_placeholder');
-    const hint = dgSection.querySelector('.drawer-hint');
-    if (hint) hint.textContent = t('settings_deepgram_hint');
+  // Offline transcription section
+  const offSection = $('offline-transcribe-section');
+  if (offSection) {
+    offSection.querySelector('.drawer-section-title').textContent = t('settings_deepgram_files_section');
+    $('deepgram-key-input').placeholder = t('settings_deepgram_key_placeholder');
+    $('groq-offline-key-input').placeholder = t('settings_groq_key_placeholder');
+    $('gemini-offline-key-input').placeholder = t('settings_gemini_key_placeholder');
+    $('offline-transcribe-hint').innerHTML = t('settings_deepgram_hint');
+    $('offline-lang-label').textContent = t('settings_offline_lang_label');
+    $('offline-lang').options[0].textContent = t('settings_offline_lang_auto');
   }
   set('bg-label', 'settings_bg_off');
   document.getElementById('btn-bg-off').title = t('settings_bg_off_title');
@@ -1738,6 +1766,18 @@ function isSupported() {
     window.AudioWorklet &&
     window.indexedDB
   );
+}
+
+function getSupportDetails() {
+  const checks = [
+    { name: 'getDisplayMedia', ok: !!navigator.mediaDevices?.getDisplayMedia },
+    { name: 'showDirectoryPicker', ok: !!window.showDirectoryPicker },
+    { name: 'AudioWorklet', ok: !!window.AudioWorklet },
+    { name: 'indexedDB', ok: !!window.indexedDB },
+  ];
+  const missing = checks.filter(c => !c.ok).map(c => c.name);
+  const notSecure = location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1';
+  return { missing, notSecure };
 }
 
 // ─────────────────────────────────────────────
@@ -1976,13 +2016,17 @@ function loadApiKey() {
   if (S.restKey) $('rest-key-input').value = S.restKey;
   S.restCustomUrl = localStorage.getItem('meetscribe_rest_url') || '';
   if (S.restCustomUrl) $('rest-url-input').value = S.restCustomUrl;
-  const dgKey = localStorage.getItem('meetscribe_deepgram_key') || '';
-  if (dgKey) $('deepgram-key-input').value = dgKey;
+  const dgKey = localStorage.getItem('meetscribe_deepgram_key');
+  if (dgKey && dgKey !== 'null') $('deepgram-key-input').value = dgKey;
+  else if (dgKey === 'null') localStorage.removeItem('meetscribe_deepgram_key');
   const dgLiveKey = localStorage.getItem('meetscribe_deepgram_live_key') || '';
   if (dgLiveKey) $('deepgram-live-key-input').value = dgLiveKey;
   else if (dgKey) $('deepgram-live-key-input').value = dgKey; // prefill from post key
   const groqKey = localStorage.getItem('meetscribe_groq_key') || '';
-  if (groqKey) $('groq-key-input').value = groqKey;
+  if (groqKey) { $('groq-key-input').value = groqKey; $('groq-offline-key-input').value = groqKey; }
+  const geminiOfflineKey = localStorage.getItem('meetscribe_rest_key_gemini') || '';
+  if (geminiOfflineKey) $('gemini-offline-key-input').value = geminiOfflineKey;
+  $('offline-lang').value = localStorage.getItem('meetscribe_offline_lang') || '';
   $('rest-url-row').style.display = S.restProvider === 'custom' ? '' : 'none';
   const liveEngine = localStorage.getItem('meetscribe_live_engine') || 'gemini';
   $('live-engine').value = liveEngine;
@@ -1999,6 +2043,7 @@ function updateLiveEngineUI(engine) {
     deepgram: t('engine_hint_deepgram'),
     groq: t('engine_hint_groq'),
     webspeech: t('engine_hint_webspeech'),
+    none: t('engine_hint_none'),
   };
   $('live-engine-hint').innerHTML = hints[engine] || '';
 }
@@ -2081,6 +2126,31 @@ function saveGroqKey() {
   const orig = btn.textContent;
   btn.textContent = v ? '✅' : '🗑';
   btn.disabled = true;
+  setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2000);
+}
+
+function saveGroqOfflineKey() {
+  const v = $('groq-offline-key-input').value.trim();
+  if (v) { localStorage.setItem('meetscribe_groq_key', v); $('groq-key-input').value = v; }
+  else { localStorage.removeItem('meetscribe_groq_key'); $('groq-key-input').value = ''; }
+  const btn = $('btn-save-groq-offline-key');
+  const orig = btn.textContent;
+  btn.textContent = v ? '✅' : '🗑'; btn.disabled = true;
+  setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2000);
+}
+
+function saveGeminiOfflineKey() {
+  const v = $('gemini-offline-key-input').value.trim();
+  if (v) localStorage.setItem('meetscribe_rest_key_gemini', v);
+  else localStorage.removeItem('meetscribe_rest_key_gemini');
+  // sync live rest-key-input if gemini is selected provider
+  if (S.restProvider === 'gemini') {
+    S.restKey = v;
+    $('rest-key-input').value = v;
+  }
+  const btn = $('btn-save-gemini-offline-key');
+  const orig = btn.textContent;
+  btn.textContent = v ? '✅' : '🗑'; btn.disabled = true;
   setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2000);
 }
 
@@ -3721,11 +3791,11 @@ async function analyzeScreenshots(name, dirHandle, modelOpt) {
   const text = await readSessionFile(name, dirHandle);
   if (!text) return;
 
-  // For transcript context (±15s lookup), prefer AI file (_dg/_ai) over base txt
+  // For transcript context (±15s lookup), prefer AI file (_dg/_groq/_ai) over base txt
   const baseName = name.replace(/\.txt$/, '');
-  const dgName = baseName + '_dg.txt', aiName = baseName + '_ai.txt';
+  const dgName = baseName + '_dg.txt', groqName = baseName + '_groq.txt', aiName = baseName + '_ai.txt';
   let contextText = text;
-  for (const n of [dgName, aiName]) {
+  for (const n of [dgName, groqName, aiName]) {
     const t = await readSessionFile(n, dirHandle, true);
     if (t) { contextText = t; break; }
   }
@@ -3843,7 +3913,7 @@ async function deleteScreenshotFromSession(fname, dirHandle, cardEl) {
   // Rewrite .txt: remove [SCREENSHOT: fname] and following [SCREEN: ...] line
   const txtFiles = [];
   for await (const [fn] of dirHandle.entries()) {
-    if (fn.endsWith('.txt') && !fn.endsWith('_dg.txt') && !fn.endsWith('_ai.txt')) txtFiles.push(fn);
+    if (fn.endsWith('.txt') && !fn.endsWith('_dg.txt') && !fn.endsWith('_groq.txt') && !fn.endsWith('_ai.txt')) txtFiles.push(fn);
   }
   for (const txtName of txtFiles) {
     try {
@@ -3888,7 +3958,9 @@ async function startRecording() {
   S.sessionEnded = false;
   S.reconnectAttempts = 0;
   S.sttMode = localStorage.getItem('meetscribe_live_engine') || 'gemini';
-  if (S.sttMode === 'deepgram') {
+  if (S.sttMode === 'none') {
+    $('recording-idle-label').style.display = '';
+  } else if (S.sttMode === 'deepgram') {
     connectDG();
   } else if (S.sttMode === 'groq') {
     startGroq();
@@ -4229,6 +4301,7 @@ const BACKUP_LS_KEYS = [
   'meetscribe_groq_key',
   'meetscribe_last_summary_model',
   'meetscribe_live_engine',
+  'meetscribe_offline_lang',
   'meetscribe_chat_model',
   'meetscribe_lang',
   'meetscribe_theme',
@@ -4306,7 +4379,8 @@ async function restoreBackup(file) {
 
   // Restore localStorage
   for (const [key, val] of Object.entries(backup.settings || {})) {
-    localStorage.setItem(key, val);
+    if (val == null) localStorage.removeItem(key);
+    else localStorage.setItem(key, val);
   }
 
   // Restore glossary
@@ -4439,8 +4513,9 @@ async function loadSessions() {
         : (await sessionFiles.get(baseTxt).getFile()).lastModified;
 
       const dgName = entryName + '_dg.txt';
+      const groqName = entryName + '_groq.txt';
       const aiName = entryName + '_ai.txt';
-      const aiFile = sessionFiles.has(dgName) ? dgName : sessionFiles.has(aiName) ? aiName : null;
+      const aiFile = sessionFiles.has(dgName) ? dgName : sessionFiles.has(groqName) ? groqName : sessionFiles.has(aiName) ? aiName : null;
 
       let webmSize = null;
       const webmName = entryName + '.webm';
@@ -4505,7 +4580,7 @@ function renderSessions(query = '') {
       ? escHtml(titlePart).replace(new RegExp(escRegex(q), 'gi'), m => `<mark class="search-hl">${m}</mark>`)
       : escHtml(titlePart);
     const ext = name.match(/\.([^.]+)$/)?.[1]?.toUpperCase() || '';
-    const aiLabel = aiFile ? (aiFile.endsWith('_dg.txt') ? ' · DG' : ' · AI') : '';
+    const aiLabel = aiFile ? (aiFile.endsWith('_dg.txt') ? ' · DG' : aiFile.endsWith('_groq.txt') ? ' · Groq' : ' · AI') : '';
     const sizeLabel = webmSize != null ? ` · ${(webmSize / 1024 / 1024).toFixed(1)} MB` : '';
 
     item.innerHTML = `
@@ -4516,7 +4591,7 @@ function renderSessions(query = '') {
       <div class="sess-actions">
         ${name.endsWith('.txt') ? `<button data-action="summarize" title="${t('sessions_btn_summarize_title')}">✨</button>` : ''}
         ${name.endsWith('.txt') ? `<button data-action="chat" title="${t('sessions_btn_chat_title')}">💬</button>` : ''}
-        ${name.endsWith('.txt') ? `<button data-action="ai-transcribe" title="${localStorage.getItem('meetscribe_deepgram_key') ? t('sessions_btn_ai_transcribe_title_dg') : t('sessions_btn_ai_transcribe_title_gemini')}">🎙</button>` : ''}
+        ${name.endsWith('.txt') ? `<button data-action="ai-transcribe" title="${t('sessions_btn_ai_transcribe_title')}">🎙</button>` : ''}
         ${name.endsWith('.txt') ? `<button data-action="analyze-screens" title="${t('sessions_btn_analyze_screens_title')}">🖼</button>` : ''}
         <button class="sess-more-btn ghost" data-action="more" title="⋯">⋯</button>
       </div>`;
@@ -5121,6 +5196,160 @@ async function identifySpeakers(lines) {
   } catch(e) {
     console.warn('identifySpeakers failed:', e);
     return null;
+  }
+}
+
+function pickTranscribeEngine(anchorEl) {
+  return new Promise(resolve => {
+    const engines = [
+      { id: 'deepgram', label: t('transcribe_picker_dg'),    key: localStorage.getItem('meetscribe_deepgram_key') },
+      { id: 'groq',     label: t('transcribe_picker_groq'),   key: localStorage.getItem('meetscribe_groq_key') },
+      { id: 'gemini',   label: t('transcribe_picker_gemini'), key: localStorage.getItem('meetscribe_rest_key_gemini') },
+    ];
+    const dd = document.createElement('div');
+    dd.className = 'prompt-dropdown';
+    dd.innerHTML = `<div class="prompt-dropdown-hint">${t('transcribe_picker_title')}</div>` +
+      engines.map((e, i) => {
+        const noKey = `<span style="color:var(--dim);font-size:11px"> ${t('transcribe_picker_no_key')}</span>`;
+        return `<button class="prompt-opt" data-idx="${i}"${e.key ? '' : ' disabled'}>${escHtml(e.label)}${e.key ? '' : noKey}</button>`;
+      }).join('');
+    document.body.appendChild(dd);
+    const rect = anchorEl.getBoundingClientRect();
+    const ddH = engines.length * 36 + 30;
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const top = spaceBelow > ddH ? rect.bottom + 4 : rect.top - ddH - 4;
+    dd.style.top = Math.max(4, top) + 'px';
+    dd.style.left = Math.max(4, rect.right - (dd.offsetWidth || 220)) + 'px';
+    const close = val => { dd.remove(); outsideHandler(); resolve(val); };
+    dd.querySelectorAll('.prompt-opt:not([disabled])').forEach(btn =>
+      btn.addEventListener('click', () => close(engines[parseInt(btn.dataset.idx)].id))
+    );
+    const outsideHandler = () => document.removeEventListener('mousedown', onOutside);
+    const onOutside = e => { if (!dd.contains(e.target)) { dd.remove(); outsideHandler(); resolve(null); } };
+    setTimeout(() => document.addEventListener('mousedown', onOutside), 0);
+  });
+}
+
+async function transcribeAudioWithGroq(txtName, dirHandle = S.dirHandle) {
+  const key = localStorage.getItem('meetscribe_groq_key');
+  if (!key) { showError(t('error_ai_transcribe_no_key_gemini').replace('Gemini', 'Groq').replace('Summary →', 'Settings →')); return; }
+  if (!dirHandle) { showError(t('error_ai_transcribe_no_folder')); return; }
+  const opKey = 'transcribe:' + txtName;
+  if (_runningOps.has(opKey)) { autoToast(`<div class="toast-title">${t('toast_transcribing_running')}</div><div style="font-size:12px;color:var(--dim)">${escHtml(txtName)}</div>`, 3000); return; }
+  _runningOps.add(opKey);
+
+  const webmName = txtName.replace(/\.txt$/, '.webm');
+  const toast = makeToast(`
+    <div class="toast-title" id="groq-tr-title"><span class="spinner"></span> ${t('groq_transcribing')}</div>
+    <div id="groq-tr-status" style="font-size:12px;color:var(--dim);margin-top:4px">${t('dg_reading_file')}</div>
+  `);
+
+  let cancelled = false;
+  const cancelRow = document.createElement('div');
+  cancelRow.style.cssText = 'margin-top:6px';
+  const cancelBtn = document.createElement('button');
+  cancelBtn.textContent = t('groq_cancel');
+  cancelBtn.onclick = () => { cancelled = true; removeToast(toast); };
+  cancelRow.appendChild(cancelBtn);
+  toast.appendChild(cancelRow);
+
+  const setStatus = s => { const el = toast.querySelector('#groq-tr-status'); if (el) el.textContent = s; };
+  const showToastError = msg => {
+    cancelRow.remove();
+    const title = toast.querySelector('#groq-tr-title');
+    if (title) title.innerHTML = '❌ Error';
+    const el = toast.querySelector('#groq-tr-status');
+    if (el) { el.textContent = msg; el.style.color = 'var(--danger)'; }
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:6px;margin-top:8px';
+    const retryBtn = document.createElement('button');
+    retryBtn.textContent = t('groq_retry');
+    retryBtn.className = 'primary';
+    retryBtn.onclick = () => { removeToast(toast); transcribeAudioWithGroq(txtName, dirHandle); };
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = t('groq_close');
+    closeBtn.onclick = () => removeToast(toast);
+    row.appendChild(retryBtn); row.appendChild(closeBtn);
+    toast.appendChild(row);
+  };
+
+  try {
+    console.log('[Groq] start, webmName=', webmName);
+    let fh;
+    try { fh = await dirHandle.getFileHandle(webmName); }
+    catch { throw new Error(t('error_audio_file_not_found') + webmName); }
+    const file = await fh.getFile();
+    console.log('[Groq] file size=', file.size, 'type=', file.type);
+
+    const MAX_GROQ = 25 * 1024 * 1024;
+    if (file.size > MAX_GROQ) throw new Error(t('groq_error_too_large'));
+
+    setStatus(t('groq_sending').replace('{size}', (file.size / 1024 / 1024).toFixed(1)));
+    if (cancelled) { _runningOps.delete(opKey); return; }
+
+    const offlineLang = localStorage.getItem('meetscribe_offline_lang') || '';
+    const fd = new FormData();
+    fd.append('file', new Blob([await file.arrayBuffer()], { type: 'audio/webm' }), webmName);
+    fd.append('model', 'whisper-large-v3-turbo');
+    fd.append('response_format', 'verbose_json');
+    fd.append('timestamp_granularities[]', 'segment');
+    if (offlineLang) fd.append('language', offlineLang);
+
+    console.log('[Groq] sending POST...');
+    const resp = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${key}` },
+      body: fd,
+    });
+    console.log('[Groq] response status=', resp.status);
+
+    if (!resp.ok) {
+      const errBody = await resp.text().catch(() => '');
+      console.error('[Groq] error body:', errBody);
+      throw new Error(`Groq HTTP ${resp.status}: ${errBody.slice(0, 200)}`);
+    }
+
+    const data = await resp.json();
+    console.log('[Groq] segments=', data.segments?.length, 'text length=', data.text?.length);
+    if (cancelled) { _runningOps.delete(opKey); return; }
+
+    const fmtSec = s => {
+      const sec = Math.floor(s);
+      return `[${String(Math.floor(sec/3600)).padStart(2,'0')}:${String(Math.floor(sec%3600/60)).padStart(2,'0')}:${String(sec%60).padStart(2,'0')}]`;
+    };
+
+    const lines = (data.segments || []).map(seg => `${fmtSec(seg.start)} Speaker 1: ${seg.text.trim()}`);
+    const glossary = getGlossary();
+    const header = `MeetScribe Transcript (Groq Whisper)\n${new Date().toLocaleString(getCurrentLang() === 'ru' ? 'ru-RU' : 'en-US')}\n\n`;
+    const outText = header + lines.join('\n');
+
+    setStatus(t('groq_saving'));
+    const outName = txtName.replace(/\.txt$/, '_groq.txt');
+    console.log('[Groq] saving to', outName, 'lines=', lines.length);
+    const outFh = await dirHandle.getFileHandle(outName, { create: true });
+    const w = await outFh.createWritable();
+    await w.write(outText);
+    await w.close();
+    console.log('[Groq] saved OK');
+
+    const title = toast.querySelector('#groq-tr-title');
+    if (title) title.innerHTML = `✅ Groq — ${lines.length} segments`;
+    cancelRow.remove();
+    const closeRow = document.createElement('div');
+    closeRow.style.cssText = 'margin-top:6px';
+    const closeBtn2 = document.createElement('button');
+    closeBtn2.textContent = t('groq_close');
+    closeBtn2.onclick = () => removeToast(toast);
+    closeRow.appendChild(closeBtn2);
+    toast.appendChild(closeRow);
+    setTimeout(() => removeToast(toast), 5000);
+
+    loadSessions();
+  } catch(e) {
+    if (!cancelled) showToastError(e.message);
+    else removeToast(toast);
+  } finally {
+    _runningOps.delete(opKey);
   }
 }
 
@@ -5796,8 +6025,12 @@ async function handleSessionAction(action, name, anchorEl, aiFile, dirHandle = S
     return;
   }
   if (action === 'ai-transcribe') {
-    if (localStorage.getItem('meetscribe_deepgram_key')) transcribeAudioWithDeepgram(name, dirHandle);
+    const engine = await pickTranscribeEngine(anchorEl);
+    if (!engine) return;
+    if (engine === 'deepgram') transcribeAudioWithDeepgram(name, dirHandle);
+    else if (engine === 'groq') transcribeAudioWithGroq(name, dirHandle);
     else transcribeAudioWithAI(name, dirHandle);
+    return;
   }
   if (action === 'analyze-screens') {
     const opts = await getModelOptions();
@@ -5937,6 +6170,11 @@ function bindEvents() {
   $('deepgram-live-key-input').addEventListener('keydown', e => { if (e.key === 'Enter') saveDeepgramLiveKey(); });
   $('btn-save-groq-key').addEventListener('click', saveGroqKey);
   $('groq-key-input').addEventListener('keydown', e => { if (e.key === 'Enter') saveGroqKey(); });
+  $('btn-save-groq-offline-key').addEventListener('click', saveGroqOfflineKey);
+  $('groq-offline-key-input').addEventListener('keydown', e => { if (e.key === 'Enter') saveGroqOfflineKey(); });
+  $('btn-save-gemini-offline-key').addEventListener('click', saveGeminiOfflineKey);
+  $('gemini-offline-key-input').addEventListener('keydown', e => { if (e.key === 'Enter') saveGeminiOfflineKey(); });
+  $('offline-lang').addEventListener('change', e => localStorage.setItem('meetscribe_offline_lang', e.target.value));
   $('live-engine').addEventListener('change', e => {
     const engine = e.target.value;
     localStorage.setItem('meetscribe_live_engine', engine);
@@ -6111,6 +6349,17 @@ async function init() {
   $('btn-lang').textContent = getCurrentLang().toUpperCase();
 
   if (!isSupported()) {
+    const { missing, notSecure } = getSupportDetails();
+    const warn = $('browser-warning');
+    if (notSecure) {
+      warn.insertAdjacentHTML('beforeend',
+        `<p style="margin-top:10px;color:#f59e0b;font-size:13px">⚠️ <strong>Not a secure context</strong> — open via <code>localhost</code>, not <code>${location.hostname}</code>.<br>Run: <code>npx serve .</code> and open <code>http://localhost:3000</code></p>`
+      );
+    } else if (missing.length) {
+      warn.insertAdjacentHTML('beforeend',
+        `<p style="margin-top:10px;font-size:12px;color:var(--dim)">Missing APIs: ${missing.join(', ')}</p>`
+      );
+    }
     show('browser-warning');
     return;
   }

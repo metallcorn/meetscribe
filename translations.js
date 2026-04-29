@@ -12,6 +12,7 @@ const LANG = {
     settings_live_section: 'Real-time transcription',
     settings_engine_label: 'Engine',
     settings_webspeech_option: 'Web Speech API (mic only)',
+    settings_none_option: 'None (record audio only)',
     settings_gemini_key_placeholder: 'Gemini API key',
     settings_deepgram_live_key_placeholder: 'Deepgram API key for Live',
     settings_groq_key_placeholder: 'Groq API key',
@@ -22,9 +23,11 @@ const LANG = {
     settings_summary_section: 'Summary API',
     settings_provider_label: 'Provider',
     settings_api_key_placeholder: 'API key',
-    settings_deepgram_files_section: 'Deepgram (AI file transcription)',
+    settings_deepgram_files_section: 'Offline AI Transcription (🎙)',
     settings_deepgram_key_placeholder: 'Deepgram API key',
-    settings_deepgram_hint: 'Used by the 🎙 button for post-hoc transcription with diarization (speaker separation). If not set — Gemini is used.',
+    settings_deepgram_hint: 'Click 🎙 on any recorded session to pick an engine. Deepgram and Gemini include speaker detection. Groq Whisper is fast but has no speaker labels.',
+    settings_offline_lang_label: 'Language',
+    settings_offline_lang_auto: 'auto-detect',
     settings_bg_section: 'Background',
     settings_bg_off: 'Off',
     settings_bg_off_title: 'Disable background',
@@ -134,6 +137,12 @@ const LANG = {
     sessions_btn_chat_title: 'Chat about meeting',
     sessions_btn_ai_transcribe_title_dg: 'AI transcription (Deepgram)',
     sessions_btn_ai_transcribe_title_gemini: 'AI transcription (Gemini)',
+    sessions_btn_ai_transcribe_title: 'AI transcription',
+    transcribe_picker_title: 'Transcription engine',
+    transcribe_picker_dg: 'Deepgram nova-3 — with speakers',
+    transcribe_picker_groq: 'Groq Whisper — fast, no speakers',
+    transcribe_picker_gemini: 'Gemini AI — with speakers',
+    transcribe_picker_no_key: '(no key)',
     sessions_btn_analyze_screens_title: 'AI screen analysis',
 
     // ── Confirm dialog ───────────────────────────────────────────────────
@@ -273,6 +282,15 @@ const LANG = {
     ai_close: 'Close',
     ai_retry: '🔄 Retry',
 
+    // ── Groq transcription toast ─────────────────────────────────────────
+    groq_transcribing: 'Groq Whisper transcription...',
+    groq_sending: 'Sending to Groq ({size} MB)...',
+    groq_saving: 'Saving file...',
+    groq_error_too_large: 'File too large for Groq (max 25 MB). Use Deepgram or Gemini instead.',
+    groq_cancel: '✕ Cancel',
+    groq_close: 'Close',
+    groq_retry: '🔄 Retry',
+
     // ── Screen analysis ──────────────────────────────────────────────────
     screens_analyzing: '🖼 Analyzing screens (0/{total})',
     screens_progress: '🖼 Analyzing screens ({done}/{total})',
@@ -296,6 +314,7 @@ const LANG = {
     engine_hint_deepgram: 'Key from <a href="https://console.deepgram.com" target="_blank" style="color:var(--accent2)">console.deepgram.com</a> — can be the same as below. Pricing: <a href="https://deepgram.com/pricing" target="_blank" style="color:var(--accent2)">deepgram.com/pricing</a>.',
     engine_hint_groq: 'Key from <a href="https://console.groq.com/keys" target="_blank" style="color:var(--accent2)">console.groq.com</a> — Whisper Large v3 Turbo. Pricing: <a href="https://console.groq.com/settings/billing" target="_blank" style="color:var(--accent2)">console.groq.com/billing</a>.',
     engine_hint_webspeech: '⚠ Microphone only — meeting participants\' voices are not transcribed. Free, no keys needed.',
+    engine_hint_none: '💾 No live transcription — just records audio to .webm. Use the 🎙 AI Transcribe button after the meeting. Saves API costs.',
 
     // ── Folder state ─────────────────────────────────────────────────────
     folder_no_access: ' (no access)',
@@ -360,6 +379,7 @@ const LANG = {
     settings_live_section: 'Транскрипция в реальном времени',
     settings_engine_label: 'Движок',
     settings_webspeech_option: 'Web Speech API (только мик)',
+    settings_none_option: 'Без транскрипции (только аудио)',
     settings_gemini_key_placeholder: 'Gemini API ключ',
     settings_deepgram_live_key_placeholder: 'Deepgram API ключ для Live',
     settings_groq_key_placeholder: 'Groq API ключ',
@@ -370,9 +390,11 @@ const LANG = {
     settings_summary_section: 'Summary API',
     settings_provider_label: 'Провайдер',
     settings_api_key_placeholder: 'API ключ',
-    settings_deepgram_files_section: 'Deepgram (AI транскрипция файлов)',
+    settings_deepgram_files_section: 'Офлайн AI транскрипция (🎙)',
     settings_deepgram_key_placeholder: 'Deepgram API ключ',
-    settings_deepgram_hint: 'Используется кнопкой 🎙 для постфактум-транскрибации с диаризацией (разделение по спикерам). Если не задан — используется Gemini.',
+    settings_deepgram_hint: 'Нажмите 🎙 у любой записанной сессии — выберите движок. Deepgram и Gemini определяют спикеров. Groq Whisper быстрее, но без разделения по спикерам.',
+    settings_offline_lang_label: 'Язык',
+    settings_offline_lang_auto: 'авто',
     settings_bg_section: 'Фон',
     settings_bg_off: 'Выкл',
     settings_bg_off_title: 'Отключить фон',
@@ -482,6 +504,12 @@ const LANG = {
     sessions_btn_chat_title: 'Чат по встрече',
     sessions_btn_ai_transcribe_title_dg: 'AI транскрипция (Deepgram)',
     sessions_btn_ai_transcribe_title_gemini: 'AI транскрипция (Gemini)',
+    sessions_btn_ai_transcribe_title: 'AI транскрипция',
+    transcribe_picker_title: 'Движок транскрипции',
+    transcribe_picker_dg: 'Deepgram nova-3 — со спикерами',
+    transcribe_picker_groq: 'Groq Whisper — быстро, без спикеров',
+    transcribe_picker_gemini: 'Gemini AI — со спикерами',
+    transcribe_picker_no_key: '(нет ключа)',
     sessions_btn_analyze_screens_title: 'AI анализ экранов',
 
     // ── Confirm dialog ───────────────────────────────────────────────────
@@ -621,6 +649,15 @@ const LANG = {
     ai_close: 'Закрыть',
     ai_retry: '🔄 Повторить',
 
+    // ── Groq transcription toast ─────────────────────────────────────────
+    groq_transcribing: 'Groq Whisper транскрипция...',
+    groq_sending: 'Отправляю в Groq ({size} MB)...',
+    groq_saving: 'Сохраняю файл...',
+    groq_error_too_large: 'Файл слишком большой для Groq (макс. 25 МБ). Используйте Deepgram или Gemini.',
+    groq_cancel: '✕ Отменить',
+    groq_close: 'Закрыть',
+    groq_retry: '🔄 Повторить',
+
     // ── Screen analysis ──────────────────────────────────────────────────
     screens_analyzing: '🖼 Анализирую экраны (0/{total})',
     screens_progress: '🖼 Анализирую экраны ({done}/{total})',
@@ -644,6 +681,7 @@ const LANG = {
     engine_hint_deepgram: 'Ключ от <a href="https://console.deepgram.com" target="_blank" style="color:var(--accent2)">console.deepgram.com</a> — можно тот же что ниже. Актуальные цены: <a href="https://deepgram.com/pricing" target="_blank" style="color:var(--accent2)">deepgram.com/pricing</a>.',
     engine_hint_groq: 'Ключ от <a href="https://console.groq.com/keys" target="_blank" style="color:var(--accent2)">console.groq.com</a> — Whisper Large v3 Turbo. Актуальные цены: <a href="https://console.groq.com/settings/billing" target="_blank" style="color:var(--accent2)">console.groq.com/billing</a>.',
     engine_hint_webspeech: '⚠ Только микрофон — голоса участников встречи не транскрибируются. Бесплатно, без ключей.',
+    engine_hint_none: '💾 Без транскрипции в реальном времени — только запись аудио в .webm. После встречи используйте кнопку 🎙 AI Транскрипция. Экономит деньги на API.',
 
     // ── Folder state ─────────────────────────────────────────────────────
     folder_no_access: ' (нет доступа)',
