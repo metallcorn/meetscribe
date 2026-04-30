@@ -2202,26 +2202,32 @@ async function createAudioFile() {
   // Init empty file so seek(0) works on first chunk
   { const w = await fh.createWritable(); await w.close(); }
   let audioOffset = 0;
+  // Serialize writes: each chunk waits for the previous one to finish
+  // before opening a new writable. Prevents offset corruption when two
+  // async handlers are in flight simultaneously (e.g. slow disk + 2s chunks).
+  let writeChain = Promise.resolve();
 
   let resolveAudioReady;
   S.audioReadyPromise = new Promise(r => { resolveAudioReady = r; });
 
   S.mediaRecorder = new MediaRecorder(recDest.stream, { mimeType: mime });
   // Close+reopen after each chunk so data is committed even if tab crashes
-  S.mediaRecorder.ondataavailable = async e => {
+  S.mediaRecorder.ondataavailable = e => {
     if (!e.data || e.data.size === 0) return;
-    try {
-      const w = await fh.createWritable({ keepExistingData: true });
-      await w.seek(audioOffset);
-      await w.write(e.data);
-      audioOffset += e.data.size;
-      await w.close();
-    } catch(err) { console.error('audio write error', err); }
+    writeChain = writeChain.then(async () => {
+      try {
+        const w = await fh.createWritable({ keepExistingData: true });
+        await w.seek(audioOffset);
+        await w.write(e.data);
+        audioOffset += e.data.size;
+        await w.close();
+      } catch(err) { console.error('audio write error', err); }
+    });
   };
   S.mediaRecorder.onstop = async () => {
     recCtx.close();
     try {
-      // Patch EBML Duration so players (VLC etc.) show timeline
+      await writeChain; // ensure last chunk is fully written before patching
       const durationMs = Date.now() - S.recStartTime;
       await patchWebmDuration(fh, durationMs);
       resolveAudioReady(name);
