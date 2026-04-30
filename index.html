@@ -1466,6 +1466,7 @@
         <button id="btn-stop" disabled title="Завершить запись  [Alt+S]">⏹ Завершить</button>
         <button id="btn-restart" disabled title="Завершить и начать новую  [Alt+N]">⏭ Завершить и новую</button>
         <button id="btn-mic-mute" disabled class="ghost hidden" title="Заглушить микрофон  [Alt+M]"><canvas id="mic-wave-btn"></canvas><span>🎙 Выкл мик</span></button>
+        <button id="btn-screenshot" disabled class="ghost hidden" title="Скриншот  [Alt+P]">📷</button>
         <button id="btn-glossary" class="ghost" style="font-size:12px">📖 Глоссарий</button>
       </div>
 
@@ -1810,6 +1811,8 @@ const S = {
   recStartTime: 0,
   audioReadyPromise: null,
   recDest: null,
+  recAudioCtx: null,
+  recAudioDest: null,
   // websocket
   ws: null,
   wsReady: false,
@@ -2183,7 +2186,9 @@ async function createAudioFile() {
 
   // Separate AudioContext at native rate (48kHz) — independent of transcription pipeline
   const recCtx = new AudioContext();
+  S.recAudioCtx = recCtx;
   const recDest = recCtx.createMediaStreamDestination();
+  S.recAudioDest = recDest;
 
   const tabAudio = S.displayStream.getAudioTracks();
   if (tabAudio.length > 0) {
@@ -3511,6 +3516,8 @@ function stopAudio() {
   if (S.micStream) { S.micStream.getTracks().forEach(tr => tr.stop()); S.micStream = null; }
   if (S.audioCtx) { S.audioCtx.close(); S.audioCtx = null; }
   S.recDest = null;
+  S.recAudioCtx = null;
+  S.recAudioDest = null;
 }
 
 function showTabClosedToast() {
@@ -3545,14 +3552,27 @@ async function reattachTabAudio() {
   }
   if (S.displayStream) S.displayStream.getTracks().forEach(tr => tr.stop());
   S.displayStream = newStream;
-  // Connect new source into the existing pipeline; old dead source just outputs silence
+
+  // Reconnect transcription pipeline
   const newTabSrc = S.audioCtx.createMediaStreamSource(newStream);
   newTabSrc.channelCount = 1;
   newTabSrc.connect(S.workletNode);
   newTabSrc.connect(S.tabAnalyser);
+
+  // Reconnect recording pipeline (recAudioCtx is the 48kHz ctx from createAudioFile)
+  if (S.recAudioCtx && S.recAudioDest) {
+    S.recAudioCtx.createMediaStreamSource(new MediaStream(audioTracks)).connect(S.recAudioDest);
+  }
+
   audioTracks[0].addEventListener('ended', () => { if (S.recording) showTabClosedToast(); });
+
+  // Restart frame grabber with new video track
   const vt = newStream.getVideoTracks()[0];
-  if (vt) S.videoTrack = vt;
+  if (vt) {
+    S.videoTrack = vt;
+    stopFrameGrabber();
+    startFrameGrabber().catch(e => console.warn('[FrameGrabber] reattach error', e));
+  }
 }
 
 // ─────────────────────────────────────────────
@@ -3685,6 +3705,24 @@ async function captureAndSave(video, canvas, ctx) {
     const el = document.querySelector(`.screen-card[data-screen="${CSS.escape(old.name)}"]`);
     if (el) { const img = el.querySelector('img'); if (img) img.removeAttribute('src'); }
   }
+}
+
+async function captureManualScreenshot() {
+  if (!S.recording || !S.videoTrack || S.videoTrack.readyState !== 'live') return;
+  if (!S.screenDirHandle) return;
+  const video = document.createElement('video');
+  video.autoplay = true; video.muted = true; video.playsInline = true;
+  video.srcObject = new MediaStream([S.videoTrack]);
+  await new Promise(resolve => {
+    if (video.readyState >= 1) { resolve(); return; }
+    video.onloadedmetadata = resolve;
+    setTimeout(resolve, 2000);
+  });
+  video.play().catch(() => {});
+  await new Promise(r => setTimeout(r, 100)); // let first frame render
+  const canvas = document.createElement('canvas');
+  await captureAndSave(video, canvas, canvas.getContext('2d'));
+  video.srcObject = null;
 }
 
 function stopFrameGrabber() {
@@ -3986,7 +4024,11 @@ async function startRecording() {
     btn.disabled = false;
     btn.querySelector('span').textContent = t('btn_mic_mute_off');
   }
-
+  if (S.videoTrack) {
+    const btn = $('btn-screenshot');
+    btn.classList.remove('hidden');
+    btn.disabled = false;
+  }
 }
 
 function showMeetingNameToast(dirName) {
@@ -4059,6 +4101,7 @@ async function stopRecording(forRestart = false) {
   $('btn-restart').disabled = true;
   const micBtn = $('btn-mic-mute');
   micBtn.disabled = true; micBtn.classList.add('hidden'); micBtn.classList.remove('muted');
+  $('btn-screenshot').disabled = true; $('btn-screenshot').classList.add('hidden');
   refreshStartBtn();
   loadSessions();
 
@@ -6193,6 +6236,7 @@ function bindEvents() {
   $('btn-stop').addEventListener('click', () => stopRecording());
   $('btn-restart').addEventListener('click', restartRecording);
   $('btn-mic-mute').addEventListener('click', toggleMicMute);
+  $('btn-screenshot').addEventListener('click', () => captureManualScreenshot());
   $('btn-refresh').addEventListener('click', loadSessions);
   $('sessions-search').addEventListener('input', e => renderSessions(e.target.value.trim()));
 
@@ -6336,6 +6380,7 @@ function bindEvents() {
     if (e.code === 'KeyS' && !$('btn-stop').disabled)  { e.preventDefault(); stopRecording(); }
     if (e.code === 'KeyN' && !$('btn-restart').disabled){ e.preventDefault(); restartRecording(); }
     if (e.code === 'KeyM' && !$('btn-mic-mute').disabled){ e.preventDefault(); toggleMicMute(); }
+    if (e.code === 'KeyP' && !$('btn-screenshot').disabled){ e.preventDefault(); captureManualScreenshot(); }
   });
 
   bindChatEvents();
