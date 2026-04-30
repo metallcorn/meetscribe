@@ -1813,6 +1813,7 @@ const S = {
   recDest: null,
   recAudioCtx: null,
   recAudioDest: null,
+  recTabSource: null,
   // websocket
   ws: null,
   wsReady: false,
@@ -2192,7 +2193,8 @@ async function createAudioFile() {
 
   const tabAudio = S.displayStream.getAudioTracks();
   if (tabAudio.length > 0) {
-    recCtx.createMediaStreamSource(new MediaStream(tabAudio)).connect(recDest);
+    S.recTabSource = recCtx.createMediaStreamSource(new MediaStream(tabAudio));
+    S.recTabSource.connect(recDest);
   }
   if (S.micStream) {
     recCtx.createMediaStreamSource(S.micStream).connect(recDest);
@@ -2200,39 +2202,33 @@ async function createAudioFile() {
 
   const fh = await S.recDirHandle.getFileHandle(name, { create: true });
   // Init empty file so seek(0) works on first chunk
-  { const w = await fh.createWritable(); await w.close(); }
-  let audioOffset = 0;
-  // Serialize writes: each chunk waits for the previous one to finish
-  // before opening a new writable. Prevents offset corruption when two
-  // async handlers are in flight simultaneously (e.g. slow disk + 2s chunks).
+  // Single writable kept open for entire recording — avoids potential
+  // keepExistingData issues on large files and removes all seek complexity.
+  const audioW = await fh.createWritable();
   let writeChain = Promise.resolve();
 
   let resolveAudioReady;
   S.audioReadyPromise = new Promise(r => { resolveAudioReady = r; });
 
   S.mediaRecorder = new MediaRecorder(recDest.stream, { mimeType: mime });
-  // Close+reopen after each chunk so data is committed even if tab crashes
   S.mediaRecorder.ondataavailable = e => {
     if (!e.data || e.data.size === 0) return;
     writeChain = writeChain.then(async () => {
-      try {
-        const w = await fh.createWritable({ keepExistingData: true });
-        await w.seek(audioOffset);
-        await w.write(e.data);
-        audioOffset += e.data.size;
-        await w.close();
-      } catch(err) { console.error('audio write error', err); }
+      try { await audioW.write(e.data); }
+      catch(err) { console.error('audio write error', err); }
     });
   };
   S.mediaRecorder.onstop = async () => {
     recCtx.close();
     try {
-      await writeChain; // ensure last chunk is fully written before patching
+      await writeChain;
+      await audioW.close();
       const durationMs = Date.now() - S.recStartTime;
       await patchWebmDuration(fh, durationMs);
       resolveAudioReady(name);
     } catch(e) {
       console.error('audio save error', e);
+      try { await audioW.close(); } catch {}
       resolveAudioReady(null);
     }
   };
@@ -2244,6 +2240,8 @@ async function createAudioFile() {
 // We find that Void and replace it with a Duration float64 element.
 async function patchWebmDuration(fh, durationMs) {
   const file = await fh.getFile();
+  console.log('[patchWebm]', fh.name, 'size:', file.size, 'duration:', Math.round(durationMs), 'ms');
+  if (file.size === 0) { console.warn('[patchWebm] empty file, skipping'); return; }
   let buf  = new Uint8Array(await file.arrayBuffer());
 
   // EBML VINT (data size): leading 1-bit encodes width, rest is value
@@ -2313,10 +2311,19 @@ async function patchWebmDuration(fh, durationMs) {
             data[0] = 0x44; data[1] = 0x89; // Duration ID
             data[2] = 0x88;                   // size = 8 (float64)
             new DataView(data.buffer).setFloat64(3, durationMs, false);
-            if (totalBytes > 11) {
+            if (totalBytes >= 13) {
+              // Trailing Void to fill remaining space (need ≥ 2 bytes for valid VINT)
+              const voidPayload = totalBytes - 13;
               data[11] = 0xEC;
-              data[12] = 0x80 | (totalBytes - 13);
+              // Use 2-byte VINT if payload > 126 (1-byte VINT max)
+              if (voidPayload <= 126) {
+                data[12] = 0x80 | voidPayload;
+              } else {
+                data[12] = 0x40 | (voidPayload >> 8);
+                data[13] = voidPayload & 0xFF;
+              }
             }
+            // totalBytes === 12: 1 byte left — can't fit valid Void; leave as 0x00
             patch = { mode: 'seek', pos: ipos, data };
             break;
           }
@@ -2346,7 +2353,9 @@ async function patchWebmDuration(fh, durationMs) {
       pos = elemEnd;
     }
 
-    if (!patch) { console.warn('patchWebmDuration: nothing to patch'); return; }
+    if (!patch) { console.warn('[patchWebm] nothing to patch'); return; }
+    console.log('[patchWebm] patch mode:', patch.mode,
+      patch.mode === 'seek' ? `pos=${patch.pos} bytes=${patch.data.length}` : `newBufSize=${patch.buf.length}`);
 
     if (patch.mode === 'seek') {
       // Safe: only overwrite the exact bytes that changed, file size unchanged
@@ -2360,8 +2369,9 @@ async function patchWebmDuration(fh, durationMs) {
       await w.write(patch.buf);
       await w.close();
     }
+    console.log('[patchWebm] done');
   } catch(e) {
-    console.error('patchWebmDuration error', e);
+    console.error('[patchWebm] error', e);
   }
 }
 
@@ -3566,9 +3576,11 @@ async function reattachTabAudio() {
   newTabSrc.connect(S.workletNode);
   newTabSrc.connect(S.tabAnalyser);
 
-  // Reconnect recording pipeline (recAudioCtx is the 48kHz ctx from createAudioFile)
+  // Reconnect recording pipeline — disconnect old tab source first to avoid double-mix
   if (S.recAudioCtx && S.recAudioDest) {
-    S.recAudioCtx.createMediaStreamSource(new MediaStream(audioTracks)).connect(S.recAudioDest);
+    if (S.recTabSource) { try { S.recTabSource.disconnect(); } catch {} }
+    S.recTabSource = S.recAudioCtx.createMediaStreamSource(new MediaStream(audioTracks));
+    S.recTabSource.connect(S.recAudioDest);
   }
 
   audioTracks[0].addEventListener('ended', () => { if (S.recording) showTabClosedToast(); });
