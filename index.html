@@ -2259,6 +2259,9 @@ async function patchWebmDuration(fh, durationMs) {
     return             { id: (b << 24) | (buf[pos+1] << 16) | (buf[pos+2] << 8) | buf[pos+3], n: 4 };
   }
 
+  // patch descriptor: { mode: 'seek', pos, data } or { mode: 'rewrite', buf }
+  let patch = null;
+
   try {
     // ── EBML Header ────────────────────────────────────────────────
     const e0 = eid(0);
@@ -2271,75 +2274,64 @@ async function patchWebmDuration(fh, durationMs) {
     if (e1.id !== 0x18538067) return;
     const s1    = vint(segPos + e1.n);
     const segData = segPos + e1.n + s1.n;
-    // Segment size is often "unknown" (0x01FFFFFF…) in streamed WebM
     const segEnd  = s1.v > buf.length ? buf.length : segData + s1.v;
 
     // ── Scan top-level Segment children for SegmentInfo ─────────────
     let pos = segData;
-    let patched = false;
     outer: while (pos < Math.min(segEnd, segData + 100000)) {
       const e = eid(pos);
       const s = vint(pos + e.n);
       const dataPos = pos + e.n + s.n;
       const elemEnd = dataPos + s.v;
-      const infoSizePos = pos + e.n; // byte position of SegmentInfo size VINT
+      const infoSizePos = pos + e.n;
 
       if (e.id === 0x1549A966) { // SegmentInfo
-        // ── Scan SegmentInfo children ──────────────────────────────
         let ipos = dataPos;
         while (ipos < elemEnd) {
           const ce  = eid(ipos);
           const cs  = vint(ipos + ce.n);
           const cdp = ipos + ce.n + cs.n;
-          const totalBytes = ce.n + cs.n + cs.v; // full byte span of this element
+          const totalBytes = ce.n + cs.n + cs.v;
 
           if (ce.id === 0x4489) {
-            // Duration element already present — just update value
-            const dv = new DataView(buf.buffer);
-            if      (cs.v === 8) dv.setFloat64(cdp, durationMs, false);
-            else if (cs.v === 4) dv.setFloat32(cdp, durationMs, false);
-            patched = true;
+            // Duration already present — overwrite value in-place (seek write)
+            const data = new Uint8Array(cs.v === 8 ? 8 : 4);
+            new DataView(data.buffer)[cs.v === 8 ? 'setFloat64' : 'setFloat32'](0, durationMs, false);
+            patch = { mode: 'seek', pos: cdp, data };
             break;
           }
 
           if (ce.id === 0xEC && totalBytes >= 11) {
-            // Void element with enough room: replace with Duration (2+1+8 = 11 bytes)
-            buf[ipos]   = 0x44; buf[ipos+1] = 0x89; // Duration ID
-            buf[ipos+2] = 0x88;                       // size = 8 (float64)
-            new DataView(buf.buffer).setFloat64(ipos + 3, durationMs, false);
-            // Fill leftover bytes with a smaller Void if needed
-            const leftover = totalBytes - 11;
-            if (leftover >= 2) {
-              buf[ipos+11] = 0xEC;
-              buf[ipos+12] = 0x80 | (leftover - 2); // 1-byte VINT
-              buf.fill(0, ipos + 13, ipos + totalBytes);
+            // Void with enough room — replace in-place (seek write, totalBytes ≥ 11)
+            const data = new Uint8Array(totalBytes);
+            data[0] = 0x44; data[1] = 0x89; // Duration ID
+            data[2] = 0x88;                   // size = 8 (float64)
+            new DataView(data.buffer).setFloat64(3, durationMs, false);
+            if (totalBytes > 11) {
+              data[11] = 0xEC;
+              data[12] = 0x80 | (totalBytes - 13);
             }
-            patched = true;
+            patch = { mode: 'seek', pos: ipos, data };
             break;
           }
 
           ipos = cdp + cs.v;
         }
 
-        // No Duration and no usable Void — insert 11 bytes at end of SegmentInfo
-        // Chrome's MediaRecorder writes a minimal SegmentInfo with no placeholder
-        if (!patched) {
-          const newInfoSize = s.v + 11; // 11 = 2 (ID) + 1 (size VINT) + 8 (float64)
-          // Max value for s.n-byte VINT (mask bit not counted): 2^(7*n) - 2
+        // No Duration and no usable Void — must expand (full rewrite, rare on Chrome)
+        if (!patch) {
+          const newInfoSize = s.v + 11;
           const maxForN = s.n === 1 ? 126 : s.n === 2 ? 16382 : 2097150;
           if (newInfoSize <= maxForN) {
-            // Build expanded buffer: [0..elemEnd) + Duration(11 bytes) + [elemEnd..end)
             const newBuf = new Uint8Array(buf.length + 11);
             newBuf.set(buf.subarray(0, elemEnd));
-            newBuf[elemEnd]   = 0x44; newBuf[elemEnd+1] = 0x89; // Duration ID
-            newBuf[elemEnd+2] = 0x88;                             // size = 8
+            newBuf[elemEnd]   = 0x44; newBuf[elemEnd+1] = 0x89;
+            newBuf[elemEnd+2] = 0x88;
             new DataView(newBuf.buffer).setFloat64(elemEnd + 3, durationMs, false);
             newBuf.set(buf.subarray(elemEnd), elemEnd + 11);
-            // Update SegmentInfo size VINT in-place (byte count stays the same)
             if (s.n === 1)      newBuf[infoSizePos] = 0x80 | newInfoSize;
             else if (s.n === 2) { newBuf[infoSizePos] = 0x40 | (newInfoSize >> 8); newBuf[infoSizePos+1] = newInfoSize & 0xFF; }
-            buf = newBuf;
-            patched = true;
+            patch = { mode: 'rewrite', buf: newBuf };
           }
         }
         break outer;
@@ -2348,11 +2340,20 @@ async function patchWebmDuration(fh, durationMs) {
       pos = elemEnd;
     }
 
-    if (!patched) { console.warn('patchWebmDuration: nothing to patch'); return; }
+    if (!patch) { console.warn('patchWebmDuration: nothing to patch'); return; }
 
-    const w = await fh.createWritable();
-    await w.write(buf);
-    await w.close();
+    if (patch.mode === 'seek') {
+      // Safe: only overwrite the exact bytes that changed, file size unchanged
+      const w = await fh.createWritable({ keepExistingData: true });
+      await w.seek(patch.pos);
+      await w.write(patch.data);
+      await w.close();
+    } else {
+      // Full rewrite needed (rare): read already done, write new buffer
+      const w = await fh.createWritable();
+      await w.write(patch.buf);
+      await w.close();
+    }
   } catch(e) {
     console.error('patchWebmDuration error', e);
   }
