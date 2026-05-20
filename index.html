@@ -668,6 +668,62 @@
     }
     .ov-meta { color: var(--dim); font-size: 11px; margin-bottom: 12px; }
 
+    /* ── Find bar ─────────────────────────────────────── */
+    .ov-find-bar {
+      flex-shrink: 0; background: var(--bg2); border-bottom: 1px solid var(--border);
+      padding: 6px 10px; display: flex; flex-direction: column; gap: 4px;
+    }
+    .ov-find-row { display: flex; align-items: center; gap: 4px; }
+    .ov-find-input {
+      flex: 1; font-size: 12px; padding: 4px 8px; border: 1px solid var(--border);
+      border-radius: 6px; background: var(--bg); color: var(--text); outline: none;
+      font-family: inherit; min-width: 0;
+    }
+    .ov-find-input:focus { border-color: var(--accent); }
+    .ov-find-input.no-match { border-color: var(--danger); background: rgba(255,80,80,0.07); }
+    .ov-find-count { font-size: 11px; color: var(--dim); white-space: nowrap; min-width: 44px; text-align: center; }
+    mark.ov-hl { background: rgba(250,200,0,0.35); border-radius: 2px; color: inherit; padding: 0; }
+    mark.ov-hl.current { background: rgba(255,140,0,0.55); outline: 1px solid rgba(255,140,0,0.7); }
+
+    /* ── Timeline ─────────────────────────────────────── */
+    .ov-timeline {
+      flex-shrink: 0; height: 28px; border-top: 1px solid var(--border);
+      padding: 0 10px; display: flex; align-items: center; gap: 8px; background: var(--bg2);
+    }
+    .ov-tl-label { font-size: 10px; color: var(--dim); white-space: nowrap; font-variant-numeric: tabular-nums; min-width: 34px; }
+    .ov-tl-label.right { text-align: right; }
+    .ov-tl-track {
+      flex: 1; height: 4px; background: var(--border); border-radius: 2px;
+      position: relative; cursor: pointer; transition: height 0.12s;
+    }
+    .ov-tl-track:hover { height: 6px; }
+    .ov-tl-fill { height: 100%; background: var(--accent); border-radius: 2px; pointer-events: none; }
+    .ov-tl-thumb {
+      position: absolute; top: 50%; width: 10px; height: 10px; border-radius: 50%;
+      background: var(--accent); transform: translate(-50%, -50%); pointer-events: none;
+      transition: left 0.1s;
+    }
+    .ov-tl-tooltip {
+      position: absolute; bottom: 14px; transform: translateX(-50%);
+      background: var(--bg3); border: 1px solid var(--border); border-radius: 4px;
+      padding: 2px 6px; font-size: 10px; color: var(--text); white-space: nowrap;
+      pointer-events: none; display: none;
+    }
+    .ov-tl-track:hover .ov-tl-tooltip { display: block; }
+
+    /* ── Edit bar ─────────────────────────────────────── */
+    .ov-edit-bar {
+      flex-shrink: 0; padding: 7px 12px; border-top: 1px solid var(--border);
+      background: var(--bg2); display: flex; gap: 8px; align-items: center;
+    }
+    .ov-body-edit .b-text[contenteditable] {
+      border-radius: 4px; outline: 1px dashed color-mix(in srgb, var(--accent) 50%, transparent);
+      padding: 1px 3px; cursor: text; min-height: 1em;
+    }
+    .ov-body-edit .b-text[contenteditable]:focus {
+      outline: 2px solid var(--accent); background: var(--bg); cursor: text;
+    }
+
     /* ── Smart Vision ─────────────────────────────────── */
     .screen-card {
       display: flex; align-items: flex-start; gap: 10px;
@@ -4947,6 +5003,7 @@ function renderTranscriptTxt(text, dirHandle = null) {
     mdPart = lines.slice(0, firstBubbleIdx).join('\n');
     txLines = lines.slice(firstBubbleIdx);
   }
+  div.dataset.mdPart = mdPart;
 
   // Render markdown preamble if present
   if (mdPart.trim()) {
@@ -4980,6 +5037,7 @@ function renderTranscriptTxt(text, dirHandle = null) {
       delBtn.className = 'ov-scr-del'; delBtn.textContent = t('ov_delete_screenshot');
       info.appendChild(delBtn);
       card.appendChild(img); card.appendChild(info);
+      card.dataset.rawLines = JSON.stringify([line]);
       div.appendChild(card);
       lastScrCard = { card, img, descEl, delBtn, fname };
       if (dirHandle) {
@@ -5004,6 +5062,10 @@ function renderTranscriptTxt(text, dirHandle = null) {
     const scMatch = line.match(/^\[SCREEN: (.+)\]$/);
     if (scMatch) {
       if (lastScrCard) {
+        // Accumulate raw line for edit-mode reconstruction
+        const rawArr = JSON.parse(lastScrCard.card.dataset.rawLines || '[]');
+        rawArr.push(line);
+        lastScrCard.card.dataset.rawLines = JSON.stringify(rawArr);
         const full = scMatch[1].replace(/\\n/g, '\n').trim();
         const nlIdx = full.indexOf('\n');
         const summary = nlIdx > 0 ? full.slice(0, nlIdx).trim() : full;
@@ -5036,10 +5098,16 @@ function renderTranscriptTxt(text, dirHandle = null) {
     const m = line.match(/^\[\s*(\d+:\d+:\d+)\s*\]\s*([^:]+):\s*(.+)$/s);
     if (m) {
       const [, ts, speaker, body] = m;
+      const tsParts = ts.split(':').map(Number);
+      const tsSec = tsParts[0] * 3600 + tsParts[1] * 60 + tsParts[2];
       const color = speakerColor(speaker);
       const initials = speaker.replace(/Speaker\s*/i, 'S').slice(0, 2).toUpperCase();
       const bub = document.createElement('div');
       bub.className = 'ov-bubble';
+      bub.dataset.tsStr = ts;
+      bub.dataset.tsSec = tsSec;
+      bub.dataset.speaker = speaker;
+      bub.dataset.plain = body;
       bub.innerHTML = `
         <div class="b-avatar" style="background:${color}">${escHtml(initials)}</div>
         <div class="b-body">
@@ -5051,6 +5119,7 @@ function renderTranscriptTxt(text, dirHandle = null) {
     } else if (line.trim()) {
       const meta = document.createElement('div');
       meta.className = 'ov-meta';
+      meta.dataset.rawLine = line;
       meta.textContent = line;
       div.appendChild(meta);
     }
@@ -5955,28 +6024,340 @@ async function openFileOverlay(fileName, dirHandle = S.dirHandle, baseTxtName = 
       while (si < screenshotLines.length) result.push(screenshotLines[si++]);
       mergedText = result.join('\n');
     }
-    body.appendChild(renderTranscriptTxt(mergedText, dirHandle));
+    const txDiv = renderTranscriptTxt(mergedText, dirHandle);
+    // Mark screenshot cards that came from base file (not editable in AI file save)
+    if (baseTxtName && baseTxtName !== fileName) {
+      txDiv.querySelectorAll('.ov-screenshot').forEach(el => { el.dataset.fromBase = '1'; });
+    }
+    body.appendChild(txDiv);
   }
   ov.innerHTML = `
     <div class="overlay-inner">
       <div class="overlay-hdr">
-        <span>${escHtml(fileName)}</span>
-        <div style="display:flex;gap:2px;align-items:center">
+        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1">${escHtml(fileName)}</span>
+        <div style="display:flex;gap:2px;align-items:center;flex-shrink:0;margin-left:8px">
+          <button class="ghost ov-search-btn" style="font-size:13px;padding:2px 7px;line-height:1.4" title="Find [Ctrl+F]">🔍</button>
+          <button class="ghost ov-edit-btn" style="font-size:13px;padding:2px 7px;line-height:1.4" title="Edit transcript">✏️</button>
           <button id="ov-focus" class="ghost" style="font-size:14px;padding:2px 7px;line-height:1" title="Режим фокуса">⤢</button>
           <button id="ov-close" style="font-size:15px;padding:2px 8px;line-height:1">✕</button>
         </div>
       </div>
     </div>`;
-  ov.querySelector('.overlay-inner').appendChild(body);
+  const inner = ov.querySelector('.overlay-inner');
+  inner.appendChild(body);
   ov.querySelector('#ov-close').onclick = () => closeOverlay(ov);
   ov.querySelector('#ov-focus').onclick = () => {
-    const inner = ov.querySelector('.overlay-inner');
     const on = inner.classList.toggle('focused');
-    const focusBtn = ov.querySelector('#ov-focus');
-    focusBtn.textContent = on ? '⤢' : '⤢';
-    focusBtn.title = on ? t('ov_focus_on_title') : t('ov_focus_title');
+    ov.querySelector('#ov-focus').title = on ? t('ov_focus_on_title') : t('ov_focus_title');
   };
   ov.addEventListener('click', e => { if (e.target === ov) closeOverlay(ov); });
+
+  // ── Only add find/timeline/edit for transcript .txt files ──────────────
+  const hasBubbles = body.querySelectorAll('.ov-bubble').length > 0;
+  if (!hasBubbles) {
+    ov.querySelector('.ov-search-btn').style.display = 'none';
+    ov.querySelector('.ov-edit-btn').style.display = 'none';
+    document.body.appendChild(ov);
+    return;
+  }
+
+  // ─── FIND BAR ────────────────────────────────────────────────────────
+  const findBar = document.createElement('div');
+  findBar.className = 'ov-find-bar';
+  findBar.style.display = 'none';
+  findBar.innerHTML = `
+    <div class="ov-find-row">
+      <input class="ov-find-input" id="ov-find-input" type="text" placeholder="Find…" autocomplete="off">
+      <span class="ov-find-count" id="ov-find-count"></span>
+      <button class="ghost" id="ov-find-prev" style="padding:2px 8px;font-size:15px" title="Previous [Shift+Enter]">‹</button>
+      <button class="ghost" id="ov-find-next" style="padding:2px 8px;font-size:15px" title="Next [Enter]">›</button>
+      <button class="ghost" id="ov-repl-toggle" style="padding:2px 7px;font-size:11px" title="Toggle Replace">⇄</button>
+      <button class="ghost" id="ov-find-close" style="padding:2px 7px;font-size:12px">✕</button>
+    </div>
+    <div id="ov-replace-row" style="display:none" class="ov-find-row">
+      <input class="ov-find-input" id="ov-repl-input" type="text" placeholder="Replace with…" autocomplete="off">
+      <button class="ghost" id="ov-repl-one" style="padding:2px 9px;font-size:11px">Replace</button>
+      <button class="ghost" id="ov-repl-all" style="padding:2px 9px;font-size:11px">All</button>
+    </div>`;
+  // Insert find bar between header and body
+  inner.insertBefore(findBar, body);
+
+  // ─── TIMELINE ────────────────────────────────────────────────────────
+  const bubbles = Array.from(body.querySelectorAll('.ov-bubble[data-ts-sec]'));
+  const totalSec = bubbles.length ? (+bubbles[bubbles.length - 1].dataset.tsSec || 0) : 0;
+  const fmtSec = s => {
+    const h = Math.floor(s/3600), m = Math.floor(s%3600/60), ss = Math.floor(s%60);
+    return h ? `${h}:${String(m).padStart(2,'0')}:${String(ss).padStart(2,'0')}` : `${m}:${String(ss).padStart(2,'0')}`;
+  };
+  const tl = document.createElement('div');
+  tl.className = 'ov-timeline';
+  tl.innerHTML = `
+    <span class="ov-tl-label" id="ov-tl-cur">0:00</span>
+    <div class="ov-tl-track" id="ov-tl-track">
+      <div class="ov-tl-fill" id="ov-tl-fill" style="width:0%"></div>
+      <div class="ov-tl-thumb" id="ov-tl-thumb" style="left:0%"></div>
+      <div class="ov-tl-tooltip" id="ov-tl-tip">0:00</div>
+    </div>
+    <span class="ov-tl-label right">${fmtSec(totalSec)}</span>`;
+  inner.appendChild(tl);
+
+  // Timeline scroll → thumb
+  let tlRaf = null;
+  const updateThumb = () => {
+    const bodyRect = body.getBoundingClientRect();
+    let curSec = 0;
+    for (const b of bubbles) {
+      const br = b.getBoundingClientRect();
+      if (br.bottom > bodyRect.top) { curSec = +b.dataset.tsSec || 0; break; }
+      curSec = +b.dataset.tsSec || 0;
+    }
+    const pct = totalSec > 0 ? Math.min(100, (curSec / totalSec) * 100) : 0;
+    const fill = tl.querySelector('#ov-tl-fill');
+    const thumb = tl.querySelector('#ov-tl-thumb');
+    if (fill) fill.style.width = pct + '%';
+    if (thumb) thumb.style.left = pct + '%';
+    const curLbl = tl.querySelector('#ov-tl-cur');
+    if (curLbl) curLbl.textContent = fmtSec(curSec);
+  };
+  body.addEventListener('scroll', () => {
+    if (tlRaf) cancelAnimationFrame(tlRaf);
+    tlRaf = requestAnimationFrame(updateThumb);
+  });
+
+  // Timeline click → jump to time
+  tl.querySelector('#ov-tl-track').addEventListener('click', e => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const targetSec = pct * totalSec;
+    let best = bubbles[0];
+    for (const b of bubbles) {
+      if (+b.dataset.tsSec <= targetSec) best = b;
+      else break;
+    }
+    if (best) best.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  });
+
+  // Timeline hover → tooltip
+  tl.querySelector('#ov-tl-track').addEventListener('mousemove', e => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const tip = tl.querySelector('#ov-tl-tip');
+    if (tip) { tip.textContent = fmtSec(pct * totalSec); tip.style.left = (pct * 100) + '%'; }
+  });
+
+  // ─── FIND LOGIC ──────────────────────────────────────────────────────
+  let allMatches = [], curMatch = -1;
+
+  const findInput = findBar.querySelector('#ov-find-input');
+  const countEl   = findBar.querySelector('#ov-find-count');
+
+  function clearHighlights() {
+    body.querySelectorAll('.b-text[data-orig-html]').forEach(el => {
+      el.innerHTML = el.dataset.origHtml; delete el.dataset.origHtml;
+    });
+  }
+
+  function buildMatches(query) {
+    clearHighlights();
+    allMatches = [];
+    if (!query) { countEl.textContent = ''; findInput.classList.remove('no-match'); return; }
+    const ql = query.toLowerCase();
+    for (const bub of bubbles) {
+      const bText = bub.querySelector('.b-text');
+      if (!bText) continue;
+      const text = bText.textContent;
+      const lower = text.toLowerCase();
+      let pos = 0, positions = [], out = '';
+      while (pos < text.length) {
+        const idx = lower.indexOf(ql, pos);
+        if (idx === -1) break;
+        positions.push(idx);
+        pos = idx + ql.length;
+      }
+      if (!positions.length) continue;
+      bText.dataset.origHtml = bText.innerHTML;
+      let tp = 0;
+      for (let i = 0; i < positions.length; i++) {
+        const mIdx = positions[i];
+        out += escHtml(text.slice(tp, mIdx));
+        out += `<mark class="ov-hl" data-match-idx="${allMatches.length}">${escHtml(text.slice(mIdx, mIdx + ql.length))}</mark>`;
+        allMatches.push({ bub, bText, pos: mIdx, len: ql.length });
+        tp = mIdx + ql.length;
+      }
+      out += escHtml(text.slice(tp));
+      bText.innerHTML = out;
+    }
+    findInput.classList.toggle('no-match', allMatches.length === 0 && query.length > 0);
+    updateCount();
+  }
+
+  function updateCount() {
+    countEl.textContent = allMatches.length ? `${curMatch + 1}/${allMatches.length}` : (findInput.value ? '0' : '');
+  }
+
+  function gotoMatch(idx) {
+    if (!allMatches.length) return;
+    curMatch = ((idx % allMatches.length) + allMatches.length) % allMatches.length;
+    body.querySelectorAll('mark.ov-hl').forEach(el => {
+      el.classList.toggle('current', +el.dataset.matchIdx === curMatch);
+    });
+    allMatches[curMatch].bub.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    updateCount();
+  }
+
+  findInput.addEventListener('input', () => { buildMatches(findInput.value); if (allMatches.length) gotoMatch(0); });
+  findInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); gotoMatch(e.shiftKey ? curMatch - 1 : curMatch + 1); }
+    if (e.key === 'Escape') { closeFindBar(); }
+  });
+  findBar.querySelector('#ov-find-prev').onclick = () => gotoMatch(curMatch - 1);
+  findBar.querySelector('#ov-find-next').onclick = () => gotoMatch(curMatch + 1);
+
+  const replaceRow = findBar.querySelector('#ov-replace-row');
+  findBar.querySelector('#ov-repl-toggle').onclick = () => {
+    const on = replaceRow.style.display === 'none';
+    replaceRow.style.display = on ? '' : 'none';
+    if (on) findBar.querySelector('#ov-repl-input').focus();
+  };
+
+  function openFindBar() {
+    findBar.style.display = '';
+    setTimeout(() => findInput.focus(), 30);
+  }
+  function closeFindBar() {
+    findBar.style.display = 'none';
+    clearHighlights();
+    allMatches = []; curMatch = -1; countEl.textContent = '';
+    findInput.value = '';
+    replaceRow.style.display = 'none';
+  }
+  findBar.querySelector('#ov-find-close').onclick = closeFindBar;
+  ov.querySelector('.ov-search-btn').onclick = openFindBar;
+
+  // Replace logic
+  function doReplace(replaceVal, replaceAll) {
+    if (!allMatches.length && !replaceAll) return;
+    const query = findInput.value;
+    if (!query) return;
+    if (!editMode) enterEditMode();
+    if (replaceAll) {
+      for (const bub of bubbles) {
+        const bText = bub.querySelector('.b-text');
+        if (!bText) continue;
+        const txt = bText.textContent;
+        if (!txt.toLowerCase().includes(query.toLowerCase())) continue;
+        const newTxt = txt.replace(new RegExp(escRegex(query), 'gi'), replaceVal);
+        delete bText.dataset.origHtml;
+        bText.textContent = newTxt;
+        bub.dataset.plain = newTxt;
+      }
+    } else {
+      if (curMatch < 0 || curMatch >= allMatches.length) return;
+      const { bub, bText, pos, len } = allMatches[curMatch];
+      const txt = bText.textContent;
+      const newTxt = txt.slice(0, pos) + replaceVal + txt.slice(pos + len);
+      delete bText.dataset.origHtml;
+      bText.textContent = newTxt;
+      bub.dataset.plain = newTxt;
+    }
+    markDirty();
+    buildMatches(query);
+    if (allMatches.length) gotoMatch(Math.min(curMatch, allMatches.length - 1));
+    else { curMatch = -1; updateCount(); }
+  }
+  findBar.querySelector('#ov-repl-one').onclick = () => doReplace(findBar.querySelector('#ov-repl-input').value, false);
+  findBar.querySelector('#ov-repl-all').onclick = () => doReplace(findBar.querySelector('#ov-repl-input').value, true);
+
+  // ─── EDIT MODE ───────────────────────────────────────────────────────
+  const editBar = document.createElement('div');
+  editBar.className = 'ov-edit-bar';
+  editBar.style.display = 'none';
+  editBar.innerHTML = `
+    <span id="ov-edit-status" style="font-size:12px;color:var(--dim);flex:1">✏️ Edit mode</span>
+    <button class="primary" id="ov-save-btn" style="padding:4px 14px;font-size:12px">Save</button>
+    <button class="ghost" id="ov-cancel-edit" style="padding:4px 12px;font-size:12px">Cancel</button>`;
+  inner.appendChild(editBar);
+
+  let editMode = false, dirty = false;
+
+  function markDirty() {
+    dirty = true;
+    const st = editBar.querySelector('#ov-edit-status');
+    if (st) st.textContent = '✏️ Unsaved changes';
+  }
+
+  function enterEditMode() {
+    if (editMode) return;
+    editMode = true;
+    body.classList.add('ov-body-edit');
+    bubbles.forEach(bub => {
+      const bText = bub.querySelector('.b-text');
+      if (bText) {
+        bText.contentEditable = 'true';
+        bText.spellcheck = true;
+        bText.addEventListener('input', markDirty);
+      }
+    });
+    editBar.style.display = '';
+    ov.querySelector('.ov-edit-btn').style.opacity = '0.5';
+  }
+
+  function exitEditMode(save) {
+    editMode = false; dirty = false;
+    body.classList.remove('ov-body-edit');
+    bubbles.forEach(bub => {
+      const bText = bub.querySelector('.b-text');
+      if (bText) { bText.contentEditable = 'false'; }
+    });
+    editBar.style.display = 'none';
+    ov.querySelector('.ov-edit-btn').style.opacity = '';
+  }
+
+  async function saveEdits() {
+    // Reconstruct text from DOM
+    const txDiv = body.querySelector('.ov-bubble, .ov-meta, .ov-screenshot') ? body.firstElementChild.parentElement : body;
+    const contentDiv = body.querySelector('[data-md-part]') || body.firstElementChild;
+    const mdPart = contentDiv ? (contentDiv.dataset.mdPart || '') : '';
+    const lines = [];
+    const children = contentDiv ? contentDiv.children : body.children;
+    for (const child of children) {
+      if (child.classList.contains('ov-bubble')) {
+        const bText = child.querySelector('.b-text');
+        const text = bText ? bText.textContent.trim() : '';
+        lines.push(`[${child.dataset.tsStr}] ${child.dataset.speaker}: ${text}`);
+      } else if (child.classList.contains('ov-screenshot')) {
+        if (child.dataset.fromBase === '1') continue;
+        const rawLines = JSON.parse(child.dataset.rawLines || '[]');
+        lines.push(...rawLines);
+      } else if (child.classList.contains('ov-meta')) {
+        lines.push(child.dataset.rawLine || child.textContent);
+      } else if (child.classList.contains('ov-md')) {
+        // Preamble rendered as md — skip (mdPart already captures it)
+      }
+    }
+    const newText = mdPart ? mdPart + '\n' + lines.join('\n') : lines.join('\n');
+    try {
+      const fh = await dirHandle.getFileHandle(fileName);
+      const w = await fh.createWritable();
+      await w.write(newText);
+      await w.close();
+      exitEditMode(true);
+      autoToast(`<div class="toast-title">✅ Saved</div>`, 2000);
+    } catch(e) {
+      autoToast(`<div class="toast-title">❌ Save error: ${escHtml(e.message)}</div>`, 4000);
+    }
+  }
+
+  ov.querySelector('.ov-edit-btn').onclick = () => { if (!editMode) enterEditMode(); };
+  editBar.querySelector('#ov-save-btn').onclick = saveEdits;
+  editBar.querySelector('#ov-cancel-edit').onclick = () => exitEditMode(false);
+
+  // Ctrl+F hotkey inside overlay
+  ov.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'f') { e.preventDefault(); e.stopPropagation(); openFindBar(); }
+    if (e.key === 'Escape' && findBar.style.display !== 'none') { e.stopPropagation(); closeFindBar(); }
+  });
+
   document.body.appendChild(ov);
 }
 
