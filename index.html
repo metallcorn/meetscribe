@@ -6052,15 +6052,13 @@ async function openFileOverlay(fileName, dirHandle = S.dirHandle, baseTxtName = 
   };
   ov.addEventListener('click', e => { if (e.target === ov) closeOverlay(ov); });
 
-  // ── Only add find/timeline/edit for transcript .txt files ──────────────
-  const hasBubbles = body.querySelectorAll('.ov-bubble').length > 0;
-  if (!hasBubbles) {
+  // ── Hide find/edit buttons only for .md files ────────────────────────
+  if (fileName.endsWith('.md')) {
     ov.querySelector('.ov-search-btn').style.display = 'none';
     ov.querySelector('.ov-edit-btn').style.display = 'none';
     document.body.appendChild(ov);
     return;
   }
-
   // ─── FIND BAR ────────────────────────────────────────────────────────
   const findBar = document.createElement('div');
   findBar.className = 'ov-find-bar';
@@ -6085,12 +6083,17 @@ async function openFileOverlay(fileName, dirHandle = S.dirHandle, baseTxtName = 
   // ─── TIMELINE ────────────────────────────────────────────────────────
   const bubbles = Array.from(body.querySelectorAll('.ov-bubble[data-ts-sec]'));
   const totalSec = bubbles.length ? (+bubbles[bubbles.length - 1].dataset.tsSec || 0) : 0;
+  if (!bubbles.length) {
+    // No parseable bubbles — hide timeline and edit, keep find bar for text search
+    ov.querySelector('.ov-edit-btn').style.display = 'none';
+  }
   const fmtSec = s => {
     const h = Math.floor(s/3600), m = Math.floor(s%3600/60), ss = Math.floor(s%60);
     return h ? `${h}:${String(m).padStart(2,'0')}:${String(ss).padStart(2,'0')}` : `${m}:${String(ss).padStart(2,'0')}`;
   };
   const tl = document.createElement('div');
   tl.className = 'ov-timeline';
+  if (!bubbles.length) tl.style.display = 'none';
   tl.innerHTML = `
     <span class="ov-tl-label" id="ov-tl-cur">0:00</span>
     <div class="ov-tl-track" id="ov-tl-track">
