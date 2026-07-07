@@ -2143,7 +2143,9 @@ async function saveRestKey() {
   btn.textContent = '...';
   btn.disabled = true;
   try {
-    await geminiRest(v, { contents: [{ parts: [{ text: 'Hi' }] }] });
+    const testModel = S.restProvider === 'mistral' ? 'mistral-large-latest'
+      : S.restProvider === 'gemini' ? 'gemini-2.5-flash' : 'gpt-4o-mini';
+    await callWithModelOption({ provider: S.restProvider, model: testModel }, { contents: [{ parts: [{ text: 'Hi' }] }] });
     btn.textContent = '✅';
     setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2000);
   } catch(e) {
@@ -2775,41 +2777,45 @@ function toMd(txt) {
   return md;
 }
 
+// Inject [SCREENSHOT:]/[SCREEN:] line pairs from the base .txt into an AI transcript
+// at the matching timestamp positions (screenshot markers live only in the base file)
+function mergeScreenshotLines(text, baseText) {
+  const screenshotLines = [];
+  const bl = baseText.split('\n');
+  for (let i = 0; i < bl.length; i++) {
+    if (/^\[SCREENSHOT: /.test(bl[i])) {
+      screenshotLines.push(bl[i]);
+      if (i + 1 < bl.length && /^\[SCREEN: /.test(bl[i + 1])) screenshotLines.push(bl[++i]);
+    }
+  }
+  if (!screenshotLines.length) return text;
+
+  const result = [];
+  let si = 0;
+  const scrSec = fname => { const m = fname.match(/screen_(\d{2})-(\d{2})-(\d{2})/); return m ? +m[1]*3600 + +m[2]*60 + +m[3] : -1; };
+  for (const line of text.split('\n')) {
+    const lm = line.match(/^\[(\d+):(\d+):(\d+)\]/);
+    if (lm) {
+      const lSec = +lm[1]*3600 + +lm[2]*60 + +lm[3];
+      while (si < screenshotLines.length) {
+        const sm = screenshotLines[si].match(/\[SCREENSHOT: ([^\]]+)\]/);
+        if (!sm || scrSec(sm[1]) > lSec) break;
+        result.push(screenshotLines[si++]);
+        if (si < screenshotLines.length && /^\[SCREEN: /.test(screenshotLines[si])) result.push(screenshotLines[si++]);
+      }
+    }
+    result.push(line);
+  }
+  while (si < screenshotLines.length) result.push(screenshotLines[si++]);
+  return result.join('\n');
+}
+
 async function toHtml(txt, fileName, dirHandle = null, baseTxtName = null) {
   // Merge screenshot lines from base txt when viewing an AI file (same as openFileOverlay)
   let mergedText = txt;
   if (baseTxtName && baseTxtName !== fileName && dirHandle) {
     const baseText = await readSessionFile(baseTxtName, dirHandle, true);
-    if (baseText) {
-      const screenshotLines = [];
-      const bl = baseText.split('\n');
-      for (let i = 0; i < bl.length; i++) {
-        if (/^\[SCREENSHOT: /.test(bl[i])) {
-          screenshotLines.push(bl[i]);
-          if (i + 1 < bl.length && /^\[SCREEN: /.test(bl[i + 1])) screenshotLines.push(bl[++i]);
-        }
-      }
-      if (screenshotLines.length) {
-        const txLines = txt.split('\n'), result = [];
-        let si = 0;
-        const scrSec = fname => { const m = fname.match(/screen_(\d{2})-(\d{2})-(\d{2})/); return m ? +m[1]*3600 + +m[2]*60 + +m[3] : -1; };
-        for (const line of txLines) {
-          const lm = line.match(/^\[(\d+):(\d+):(\d+)\]/);
-          if (lm) {
-            const lSec = +lm[1]*3600 + +lm[2]*60 + +lm[3];
-            while (si < screenshotLines.length) {
-              const sm = screenshotLines[si].match(/\[SCREENSHOT: ([^\]]+)\]/);
-              if (!sm || scrSec(sm[1]) > lSec) break;
-              result.push(screenshotLines[si++]);
-              if (si < screenshotLines.length && /^\[SCREEN: /.test(screenshotLines[si])) result.push(screenshotLines[si++]);
-            }
-          }
-          result.push(line);
-        }
-        while (si < screenshotLines.length) result.push(screenshotLines[si++]);
-        mergedText = result.join('\n');
-      }
-    }
+    if (baseText) mergedText = mergeScreenshotLines(txt, baseText);
   }
 
   // Pre-load all screenshots as base64 data URLs
@@ -4338,60 +4344,6 @@ async function callOpenAICompat(url, key, prompt, model) {
   return { candidates: [{ content: { parts: [{ text }] } }] };
 }
 
-function restModelLabel(model = null) {
-  const p = S.restProvider || 'gemini';
-  if (p === 'mistral') return 'Mistral / mistral-large-latest';
-  if (p === 'openai')  return 'OpenAI / gpt-4o-mini';
-  if (p === 'custom')  return 'Custom / ' + (S.restCustomUrl || '?');
-  return 'Gemini / ' + (model || 'gemini-2.5-flash');
-}
-
-
-async function geminiRest(key, body, requestedModel = null) {
-  const effectiveKey = S.restKey || key;
-  const provider = S.restProvider || 'gemini';
-  const prompt = extractPromptText(body);
-
-  if (provider === 'mistral') {
-    return callOpenAICompat('https://api.mistral.ai/v1/chat/completions', effectiveKey, prompt, 'mistral-large-latest');
-  }
-  if (provider === 'openai') {
-    return callOpenAICompat('https://api.openai.com/v1/chat/completions', effectiveKey, prompt, 'gpt-4o-mini');
-  }
-  if (provider === 'custom') {
-    return callOpenAICompat(S.restCustomUrl, effectiveKey, prompt, 'gpt-4o-mini');
-  }
-
-  // Gemini REST path
-  const modelName = requestedModel || 'gemini-2.5-flash';
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${effectiveKey}`;
-  const delays = [0, 5000, 12000, 25000];
-  for (let attempt = 0; attempt < delays.length; attempt++) {
-    if (delays[attempt]) await new Promise(r => setTimeout(r, delays[attempt]));
-    const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    if (r.ok) return r.json();
-    const errText = await r.text().catch(() => '');
-    if (r.status === 503 || r.status === 429) {
-      const next = delays[attempt + 1];
-      if (next !== undefined) { console.warn(`geminiRest attempt ${attempt + 1} failed ${r.status}, retrying in ${next}ms...`); continue; }
-    }
-    throw new Error('HTTP ' + r.status + ': ' + errText.slice(0, 200));
-  }
-  throw new Error('geminiRest: all retries exhausted (429/503)');
-}
-
-function renamePrompt(snippet) {
-  return (
-    'Придумай slug-имя файла для этой транскрипции встречи.\n' +
-    'Формат: имена участников (если упоминаются) + ключевая тема, через дефисы. Только латиница/транслит, БЕЗ цифр и дат, макс 5 слов.\n' +
-    'Тема — конкретная: название продукта, системы, задачи. НЕ абстракции типа "vision", "meeting", "discussion", "strategy", "review".\n' +
-    'Примеры: "Dasha-Anton-player-intelligence", "Galya-recommender-uplift", "onboarding-Anton", "sedra-product-pages", "vip-model-churn"\n' +
-    'Ответь ТОЛЬКО slug-именем, без объяснений, без кавычек.\n\n' +
-    'Транскрипция:\n' + snippet
-  );
-}
-
-
 function showRenameToast(fileName, suggested, aiFile, dirHandle) {
   const folderName = fileName.replace(/\.txt$/, '');
   const toast = makeToast(`
@@ -5196,132 +5148,6 @@ function renderMarkdown(text) {
 // ─────────────────────────────────────────────
 // AI TRANSCRIPTION (Gemini Files API)
 // ─────────────────────────────────────────────
-// Encode Float32 mono samples to OGG/Opus Blob using WebCodecs (Chrome 94+).
-// Returns null if WebCodecs unavailable — caller should fall back to encodeWav.
-async function encodeOggOpus(samples, inputSr) {
-  if (!window.AudioEncoder || !window.AudioData) return null;
-
-  // OGG CRC32 (poly 0x04C11DB7, MSB-first, no final XOR)
-  const CRC_T = Uint32Array.from({length: 256}, (_, i) => {
-    let c = i << 24;
-    for (let j = 0; j < 8; j++) c = (c & 0x80000000) ? ((c << 1) ^ 0x04C11DB7) : (c << 1);
-    return c >>> 0;
-  });
-  const crc32ogg = d => { let c = 0; for (const b of d) c = ((c << 8) ^ CRC_T[((c >>> 24) ^ b) & 0xFF]) >>> 0; return c; };
-
-  const SR = 48000;    // Opus native sample rate
-  const FRAME = 960;   // 20 ms at 48 kHz
-  const serial = (Math.random() * 0xFFFFFFFF) | 0;
-  let seq = 0;
-  const pages = [];
-
-  // Build one OGG page containing exactly one packet
-  const makePage = (htype, granule, pkt) => {
-    const lace = [];
-    let r = pkt.length;
-    while (r >= 255) { lace.push(255); r -= 255; }
-    lace.push(r);
-    const h = new Uint8Array(27 + lace.length);
-    const hv = new DataView(h.buffer);
-    h.set([79, 103, 103, 83]); // "OggS"
-    h[5] = htype;
-    hv.setBigUint64(6, BigInt(granule), true);
-    hv.setUint32(14, serial >>> 0, true);
-    hv.setUint32(18, seq++, true);
-    // [22..25] checksum placeholder = 0
-    h[26] = lace.length;
-    h.set(lace, 27);
-    const pg = new Uint8Array(h.length + pkt.length);
-    pg.set(h); pg.set(pkt, h.length);
-    new DataView(pg.buffer).setUint32(22, crc32ogg(pg), true);
-    return pg;
-  };
-
-  // Page 0 — OpusHead identification header
-  const oh = new Uint8Array(19);
-  const ohv = new DataView(oh.buffer);
-  oh.set([79, 112, 117, 115, 72, 101, 97, 100]); // "OpusHead"
-  oh[8] = 1; oh[9] = 1;           // version=1, channels=1 (mono)
-  ohv.setUint16(10, 312, true);    // pre-skip
-  ohv.setUint32(12, inputSr, true); // input sample rate (informational)
-  // gain=0, channel mapping family=0 → already zeroed
-  pages.push(makePage(0x02, 0, oh));
-
-  // Page 1 — OpusTags comment header (empty vendor + 0 comments)
-  const ot = new Uint8Array(16);
-  ot.set([79, 112, 117, 115, 84, 97, 103, 115]); // "OpusTags"
-  // uint32 vendor_length=0, uint32 comment_count=0 → already zeroed
-  pages.push(makePage(0x00, 0, ot));
-
-  // Resample to 48 kHz if the input is at a different rate
-  let pcm = samples;
-  if (inputSr !== SR) {
-    const offCtx = new OfflineAudioContext(1, Math.ceil(samples.length / inputSr * SR), SR);
-    const buf = offCtx.createBuffer(1, samples.length, inputSr);
-    buf.copyToChannel(samples, 0);
-    const src = offCtx.createBufferSource();
-    src.buffer = buf; src.connect(offCtx.destination); src.start();
-    pcm = (await offCtx.startRendering()).getChannelData(0);
-  }
-
-  // Encode with WebCodecs AudioEncoder
-  const frames = [];
-  await new Promise((resolve, reject) => {
-    const enc = new AudioEncoder({
-      output: chunk => { const b = new Uint8Array(chunk.byteLength); chunk.copyTo(b); frames.push(b); },
-      error: reject,
-    });
-    enc.configure({ codec: 'opus', sampleRate: SR, numberOfChannels: 1, bitrate: 32000 });
-    for (let i = 0; i < pcm.length; i += FRAME) {
-      const f = new Float32Array(FRAME); // zero-padded last frame
-      f.set(pcm.subarray(i, Math.min(i + FRAME, pcm.length)));
-      const ad = new AudioData({ format: 'f32', sampleRate: SR, numberOfChannels: 1, numberOfFrames: FRAME, timestamp: (i / SR) * 1e6, data: f });
-      enc.encode(ad); ad.close();
-    }
-    enc.flush().then(() => { enc.close(); resolve(); }).catch(reject);
-  });
-
-  // Pack each Opus frame into its own OGG page
-  let granule = 312; // starts at pre-skip
-  for (let i = 0; i < frames.length; i++) {
-    granule += FRAME;
-    pages.push(makePage(i === frames.length - 1 ? 0x04 : 0x00, granule, frames[i]));
-  }
-
-  const total = pages.reduce((s, p) => s + p.length, 0);
-  const ogg = new Uint8Array(total);
-  let off = 0; for (const p of pages) { ogg.set(p, off); off += p.length; }
-  return new Blob([ogg], { type: 'audio/ogg' });
-}
-
-// Encode Float32 mono samples to a 16-bit WAV Blob
-function encodeWav(samples, sampleRate) {
-  const buf = new ArrayBuffer(44 + samples.length * 2);
-  const v = new DataView(buf);
-  const wr = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
-  wr(0, 'RIFF'); v.setUint32(4, 36 + samples.length * 2, true); wr(8, 'WAVE');
-  wr(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); // PCM mono
-  v.setUint16(22, 1, true); v.setUint32(24, sampleRate, true);
-  v.setUint32(28, sampleRate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
-  wr(36, 'data'); v.setUint32(40, samples.length * 2, true);
-  let o = 44;
-  for (const x of samples) {
-    const s = Math.max(-1, Math.min(1, x));
-    v.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
-    o += 2;
-  }
-  return new Blob([buf], { type: 'audio/wav' });
-}
-
-// Add offsetSec to every [HH:MM:SS] timestamp in a transcript string
-function offsetTimestamps(text, offsetSec) {
-  if (!offsetSec) return text;
-  return text.replace(/\[(\d{2}):(\d{2}):(\d{2})\]/g, (_, h, m, s) => {
-    const t = +h * 3600 + +m * 60 + +s + offsetSec;
-    return `[${String(Math.floor(t/3600)).padStart(2,'0')}:${String(Math.floor(t%3600/60)).padStart(2,'0')}:${String(Math.floor(t%60)).padStart(2,'0')}]`;
-  });
-}
-
 async function identifySpeakers(lines) {
   // Returns {"Speaker 0": "Иван", "Speaker 1": "Мария"} or null
   try {
@@ -5992,24 +5818,6 @@ async function openFileOverlay(fileName, dirHandle = S.dirHandle, baseTxtName = 
   const text = await readSessionFile(fileName, dirHandle);
   if (text === null) return;
 
-  // When viewing an AI file (_dg.txt/_ai.txt), screenshot markers live in base .txt — read and inject
-  let screenshotLines = [];
-  if (baseTxtName && baseTxtName !== fileName) {
-    const baseText = await readSessionFile(baseTxtName, dirHandle, true);
-    if (baseText) {
-      const bl = baseText.split('\n');
-      for (let i = 0; i < bl.length; i++) {
-        if (/^\[SCREENSHOT: /.test(bl[i])) {
-          screenshotLines.push(bl[i]);
-          if (i + 1 < bl.length && /^\[SCREEN: /.test(bl[i + 1])) {
-            screenshotLines.push(bl[i + 1]);
-            i++;
-          }
-        }
-      }
-    }
-  }
-
   const ov = document.createElement('div');
   ov.className = 'overlay';
   const body = document.createElement('div');
@@ -6017,31 +5825,11 @@ async function openFileOverlay(fileName, dirHandle = S.dirHandle, baseTxtName = 
   if (fileName.endsWith('.md')) {
     body.appendChild(renderMarkdown(text));
   } else {
-    // Inject screenshot lines from base txt at the correct timestamp position
+    // When viewing an AI file (_dg.txt/_ai.txt), screenshot markers live in base .txt — read and inject
     let mergedText = text;
-    if (screenshotLines.length) {
-      const txLines = text.split('\n');
-      const result = [];
-      let si = 0;
-      const scrSec = fname => {
-        const m = fname.match(/screen_(\d{2})-(\d{2})-(\d{2})/);
-        return m ? +m[1]*3600 + +m[2]*60 + +m[3] : -1;
-      };
-      for (const line of txLines) {
-        const lm = line.match(/^\[(\d+):(\d+):(\d+)\]/);
-        if (lm) {
-          const lSec = +lm[1]*3600 + +lm[2]*60 + +lm[3];
-          while (si < screenshotLines.length) {
-            const sm = screenshotLines[si].match(/\[SCREENSHOT: ([^\]]+)\]/);
-            if (!sm || scrSec(sm[1]) > lSec) break;
-            result.push(screenshotLines[si++]);
-            if (si < screenshotLines.length && /^\[SCREEN: /.test(screenshotLines[si])) result.push(screenshotLines[si++]);
-          }
-        }
-        result.push(line);
-      }
-      while (si < screenshotLines.length) result.push(screenshotLines[si++]);
-      mergedText = result.join('\n');
+    if (baseTxtName && baseTxtName !== fileName) {
+      const baseText = await readSessionFile(baseTxtName, dirHandle, true);
+      if (baseText) mergedText = mergeScreenshotLines(text, baseText);
     }
     const txDiv = renderTranscriptTxt(mergedText, dirHandle);
     // Mark screenshot cards that came from base file (not editable in AI file save)
