@@ -174,9 +174,11 @@ const transcriptPart = baseLines.slice(cutIdx).join('\n');
 
 - `analyzeScreenshots(name, dirHandle, modelOpt)` — находит `[SCREENSHOT: fname]` маркеры в `.txt`
 - Для каждого скриншота: ±15 секунд транскрипта как контекст → `callVision({ provider, model }, imageB64, prompt)`
-- `callVision` поддерживает Gemini (inline_data) и OpenAI-compatible (image_url)
+- `callVision` поддерживает Gemini (inline_data) и OpenAI-compatible (image_url); retry при 429/503 те же `[0, 5000, 12000, 25000]` мс — без него анализ молча обрывался после первых скриншотов
 - Mistral → `pixtral-large-latest` модель
 - Результаты вставляются обратно в `.txt` файл
+- Ошибка API помечается `action: 'fail'` (не путать со `skip` — отсутствующий файл); маркеры неудавшихся остаются в `.txt`, повторный запуск дообрабатывает только их; счётчик ошибок показывается в итоговом тосте
+- `mergeScreenshotLines(text, baseText)` — общий хелпер: вставляет пары `[SCREENSHOT:]`/`[SCREEN:]` из базового `.txt` в AI-транскрипт по таймстампам; используется в `toHtml` и `openFileOverlay`
 
 ### Аудио: PCM 16kHz + WebM/Opus запись
 
