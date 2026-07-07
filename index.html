@@ -3856,35 +3856,49 @@ function arrayBufferToBase64(buffer) {
 async function callVision({ provider, model }, imageB64, prompt) {
   const key = localStorage.getItem('meetscribe_rest_key_' + provider) || '';
 
+  let url, headers, body;
   if (provider === 'gemini') {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
-    const body = { contents: [{ parts: [
+    url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
+    headers = { 'Content-Type': 'application/json' };
+    body = { contents: [{ parts: [
       { inline_data: { mime_type: 'image/jpeg', data: imageB64 } },
       { text: prompt }
     ]}] };
-    const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    if (!r.ok) throw new Error('HTTP ' + r.status + ': ' + (await r.text().catch(() => '')).slice(0, 200));
-    const data = await r.json();
-    return (data.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
+  } else {
+    // OpenAI-compatible (openai, custom) + Mistral pixtral
+    url = provider === 'openai' ? 'https://api.openai.com/v1/chat/completions'
+      : provider === 'mistral' ? 'https://api.mistral.ai/v1/chat/completions'
+      : localStorage.getItem('meetscribe_rest_url') || '';
+    headers = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key };
+    const visionModel = provider === 'mistral' ? 'pixtral-large-latest' : model;
+    body = {
+      model: visionModel,
+      messages: [{ role: 'user', content: [
+        { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${imageB64}` } },
+        { type: 'text', text: prompt }
+      ]}],
+      max_tokens: 400
+    };
   }
 
-  // OpenAI-compatible (openai, custom) + Mistral pixtral
-  const baseUrl = provider === 'openai' ? 'https://api.openai.com/v1/chat/completions'
-    : provider === 'mistral' ? 'https://api.mistral.ai/v1/chat/completions'
-    : localStorage.getItem('meetscribe_rest_url') || '';
-  const visionModel = provider === 'mistral' ? 'pixtral-large-latest' : model;
-  const body = {
-    model: visionModel,
-    messages: [{ role: 'user', content: [
-      { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${imageB64}` } },
-      { type: 'text', text: prompt }
-    ]}],
-    max_tokens: 400
-  };
-  const r = await fetch(baseUrl, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key }, body: JSON.stringify(body) });
-  if (!r.ok) throw new Error('HTTP ' + r.status + ': ' + (await r.text().catch(() => '')).slice(0, 200));
-  const data = await r.json();
-  return (data.choices?.[0]?.message?.content || '').trim();
+  const delays = [0, 5000, 12000, 25000];
+  for (let attempt = 0; attempt < delays.length; attempt++) {
+    if (delays[attempt]) await new Promise(r => setTimeout(r, delays[attempt]));
+    const r = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+    if (r.ok) {
+      const data = await r.json();
+      return provider === 'gemini'
+        ? (data.candidates?.[0]?.content?.parts?.[0]?.text || '').trim()
+        : (data.choices?.[0]?.message?.content || '').trim();
+    }
+    const errText = await r.text().catch(() => '');
+    if ((r.status === 429 || r.status === 503) && delays[attempt + 1] !== undefined) {
+      console.warn(`callVision attempt ${attempt + 1} → ${r.status}, retry in ${delays[attempt+1]}ms`);
+      continue;
+    }
+    throw new Error('HTTP ' + r.status + ': ' + errText.slice(0, 200));
+  }
+  throw new Error('callVision: all retries exhausted (429/503)');
 }
 
 async function analyzeScreenshots(name, dirHandle, modelOpt) {
@@ -3973,7 +3987,9 @@ async function analyzeScreenshots(name, dirHandle, modelOpt) {
       desc = await callVision(modelOpt, imageB64, sysPrompt + `Conversation context (±15s):\n${context}`);
     } catch(e) {
       console.error('[ScreenAnalysis]', fname, e);
-      results.push({ lineIdx, action: 'skip' }); continue;
+      processed++;
+      toast.querySelector('.toast-title').textContent = t('screens_progress').replace('{done}', processed).replace('{total}', targets.length);
+      results.push({ lineIdx, action: 'fail' }); continue;
     }
 
     processed++;
@@ -4008,11 +4024,14 @@ async function analyzeScreenshots(name, dirHandle, modelOpt) {
   removeToast(toast);
   const ignored = results.filter(r => r.action === 'delete').length;
   const described = results.filter(r => r.action === 'describe').length;
-  if (!cancelled || described + ignored > 0) {
+  const failed = results.filter(r => r.action === 'fail').length;
+  if (!cancelled || described + ignored + failed > 0) {
+    const stats = t('toast_screens_stats').replace('{described}', described).replace('{ignored}', ignored)
+      + (failed > 0 ? t('toast_screens_failed').replace('{failed}', failed) : '');
     autoToast(
       `<div class="toast-title">${cancelled ? t('toast_screens_cancelled') : t('toast_screens_done')}</div>` +
-      `<div style="font-size:12px;color:var(--dim)">${t('toast_screens_stats').replace('{described}', described).replace('{ignored}', ignored)}</div>`,
-      5000
+      `<div style="font-size:12px;color:var(--dim)">${stats}</div>`,
+      failed > 0 ? 8000 : 5000
     );
   }
 }
