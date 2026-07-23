@@ -319,7 +319,7 @@ MeetScribe Transcript
 Процесс:
 1. Находит все `[SCREENSHOT: fname]` маркеры в `.txt` файле
 2. Для каждого скриншота — ищет ±15 секунд транскрипта для контекста
-3. Отправляет изображение + контекст в vision API (Gemini / OpenAI / Mistral pixtral)
+3. Отправляет изображение + контекст в vision API (Gemini / OpenAI / Mistral mistral-medium)
 4. Вставляет описание обратно в `.txt` файл под маркером
 
 При 429/503 от vision API — retry по стандартной схеме (0 → 5s → 12s → 25s).

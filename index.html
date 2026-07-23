@@ -3876,7 +3876,7 @@ async function callVision({ provider, model }, imageB64, prompt) {
       : provider === 'mistral' ? 'https://api.mistral.ai/v1/chat/completions'
       : localStorage.getItem('meetscribe_rest_url') || '';
     headers = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key };
-    const visionModel = provider === 'mistral' ? 'pixtral-large-latest' : model;
+    const visionModel = provider === 'mistral' ? 'mistral-medium-latest' : model;
     body = {
       model: visionModel,
       messages: [{ role: 'user', content: [
