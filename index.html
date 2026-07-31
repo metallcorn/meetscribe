@@ -4627,42 +4627,47 @@ async function loadSessions() {
   if (!S.dirHandle) return;
   renderSessionsSkeleton();
 
-  const files = [];
+  // Phase 1: quickly collect candidate session folders (single root enumeration)
+  const dirs = [];
   try {
     for await (const [entryName, h] of S.dirHandle.entries()) {
       if (h.kind !== 'directory') continue;
       // Only process folders matching YYYY-MM-DD_HH-MM pattern — ignores prompts/, backgrounds/, backup_*, etc.
       if (!/^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}/.test(entryName)) continue;
-
-      // Scan folder contents
-      const sessionFiles = new Map();
-      try {
-        for await (const [fname, fh] of h.entries()) {
-          if (fh.kind === 'file') sessionFiles.set(fname, fh);
-        }
-      } catch { continue; }
-
-      const baseTxt = entryName + '.txt';
-      if (!sessionFiles.has(baseTxt)) continue;
-
-      const m = entryName.match(/^(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})/);
-      const lastModified = m
-        ? new Date(+m[1], +m[2]-1, +m[3], +m[4], +m[5]).getTime()
-        : (await sessionFiles.get(baseTxt).getFile()).lastModified;
-
-      const dgName = entryName + '_dg.txt';
-      const groqName = entryName + '_groq.txt';
-      const aiName = entryName + '_ai.txt';
-      const aiFile = sessionFiles.has(dgName) ? dgName : sessionFiles.has(groqName) ? groqName : sessionFiles.has(aiName) ? aiName : null;
-
-      // Only detect audio presence (cheap Map lookup) — exact sizes are read
-      // on demand via the ℹ️ menu, not for all sessions on every load
-      const hasWebm = sessionFiles.has(entryName + '.webm');
-
-      files.push({ name: baseTxt, dirName: entryName, dirHandle: h, lastModified, aiFile, hasWebm });
+      dirs.push([entryName, h]);
     }
   } catch(e) { console.error('list sessions', e); return; }
 
+  // Phase 2: enumerate every folder's contents in parallel instead of one-by-one
+  const records = await Promise.all(dirs.map(async ([entryName, h]) => {
+    const sessionFiles = new Map();
+    try {
+      for await (const [fname, fh] of h.entries()) {
+        if (fh.kind === 'file') sessionFiles.set(fname, fh);
+      }
+    } catch { return null; }
+
+    const baseTxt = entryName + '.txt';
+    if (!sessionFiles.has(baseTxt)) return null;
+
+    const m = entryName.match(/^(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})/);
+    const lastModified = m
+      ? new Date(+m[1], +m[2]-1, +m[3], +m[4], +m[5]).getTime()
+      : (await sessionFiles.get(baseTxt).getFile()).lastModified;
+
+    const dgName = entryName + '_dg.txt';
+    const groqName = entryName + '_groq.txt';
+    const aiName = entryName + '_ai.txt';
+    const aiFile = sessionFiles.has(dgName) ? dgName : sessionFiles.has(groqName) ? groqName : sessionFiles.has(aiName) ? aiName : null;
+
+    // Only detect audio presence (cheap Map lookup) — exact sizes are read
+    // on demand via the ℹ️ menu, not for all sessions on every load
+    const hasWebm = sessionFiles.has(entryName + '.webm');
+
+    return { name: baseTxt, dirName: entryName, dirHandle: h, lastModified, aiFile, hasWebm };
+  }));
+
+  const files = records.filter(Boolean);
   files.sort((a, b) => b.lastModified - a.lastModified);
   S.sessionFiles = files;
 
