@@ -4819,7 +4819,7 @@ function renderSessions(query = '', animate = true) {
       : escHtml(titlePart);
     const ext = name.match(/\.([^.]+)$/)?.[1]?.toUpperCase() || '';
     const aiLabel = aiFile ? (aiFile.endsWith('_dg.txt') ? ' · DG' : aiFile.endsWith('_groq.txt') ? ' · Groq' : ' · AI') : '';
-    const audioLabel = hasWebm ? ` · <span title="${t('sessions_has_audio')}">🎧</span>` : '';
+    const audioLabel = hasWebm ? ' · WEBM' : '';
 
     item.innerHTML = `
       <div class="sess-name" title="${escHtml(aiFile || name)}">
