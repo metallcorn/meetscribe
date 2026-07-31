@@ -4250,7 +4250,19 @@ async function stopRecording(forRestart = false) {
   micBtn.disabled = true; micBtn.classList.add('hidden'); micBtn.classList.remove('muted');
   $('btn-screenshot').disabled = true; $('btn-screenshot').classList.add('hidden');
   refreshStartBtn();
-  loadSessions();
+
+  // Insert the just-finished session at the top of the list instantly (no full
+  // rescan) so it's immediately visible and renameable. Badges self-correct on
+  // the next real scan; falls back to a scan if the index isn't built yet.
+  const newRec = {
+    name: savedDirName + '.txt', dirName: savedDirName, dirHandle: S.recDirHandle,
+    lastModified: Date.now(), aiFile: null, hasWebm: !!S.audioFileName,
+  };
+  if (Array.isArray(S.sessionFiles)) {
+    updateSessionIndex(list => { if (!list.some(f => f.dirName === newRec.dirName)) list.unshift(newRec); });
+  } else {
+    loadSessions();
+  }
 
   if (!forRestart) {
     showMeetingNameToast(savedDirName);
