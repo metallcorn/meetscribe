@@ -584,6 +584,23 @@
     .sess-actions button { padding: 2px 6px; font-size: 11px; border-radius: 6px; }
     .sess-more-btn { padding: 2px 7px !important; font-size: 15px !important; line-height: 1; color: var(--dim) !important; }
     .sess-more-btn:hover { color: var(--text) !important; }
+    /* Skeleton placeholder rows shown while loadSessions() scans the folder */
+    .sess-skeleton {
+      display: flex; flex-direction: column; gap: 6px;
+      padding: 9px 10px; border-bottom: 1px solid var(--border);
+    }
+    .sess-skeleton .sk-line {
+      height: 9px; border-radius: 4px; background: var(--bg3);
+      position: relative; overflow: hidden;
+    }
+    .sess-skeleton .sk-title { width: 62%; }
+    .sess-skeleton .sk-meta  { width: 34%; height: 7px; }
+    .sess-skeleton .sk-line::after {
+      content: ''; position: absolute; inset: 0; transform: translateX(-100%);
+      background: linear-gradient(90deg, transparent, rgba(127,127,127,0.18), transparent);
+      animation: skShimmer 1.1s infinite;
+    }
+    @keyframes skShimmer { 100% { transform: translateX(100%); } }
 
     /* ── SESSION CONTEXT MENU ── */
     .sess-menu {
@@ -4157,7 +4174,7 @@ function showMeetingNameToast(dirName) {
       S.recDirHandle = renamed.dirHandle;
       if (S.chat.dirHandle && S.chat.fileName?.startsWith(dirName)) S.chat.dirHandle = renamed.dirHandle;
       autoToast(`<div class="toast-title">${t('toast_saved')}</div><div style="font-size:12px;color:var(--dim)">${escHtml(renamed.name)}/</div>`);
-      loadSessions();
+      updateSessionIndex(list => renameSessionRecord(list, dirName, renamed));
     }
   };
 
@@ -4364,7 +4381,7 @@ function showRenameToast(fileName, suggested, aiFile, dirHandle) {
     if (renamed) {
       if (S.chat.dirHandle && S.chat.fileName?.startsWith(folderName)) S.chat.dirHandle = renamed.dirHandle;
       autoToast(`<div class="toast-title">${t('toast_renamed')}</div><div style="font-size:12px;color:var(--dim)">${escHtml(renamed.name)}/</div>`);
-      loadSessions();
+      updateSessionIndex(list => renameSessionRecord(list, folderName, renamed));
     } else {
       showError(t('error_rename'));
     }
@@ -4575,8 +4592,40 @@ function updateBgControls() {
 // ─────────────────────────────────────────────
 // SESSIONS LIST
 // ─────────────────────────────────────────────
+// Placeholder rows shown while a full folder scan is in progress
+function renderSessionsSkeleton(n = 7) {
+  const list = $('sessions-list');
+  if (!list) return;
+  list.innerHTML = Array.from({ length: n }, () =>
+    `<div class="sess-skeleton"><div class="sk-line sk-title"></div><div class="sk-line sk-meta"></div></div>`
+  ).join('');
+}
+
+// Mutate the in-memory session index and re-render WITHOUT re-scanning the folder.
+// Falls back to a full scan if the index isn't built yet.
+function updateSessionIndex(mutator) {
+  if (!Array.isArray(S.sessionFiles)) { loadSessions(); return; }
+  // A mutator returning false means "record not found" — fall back to a full scan
+  if (mutator(S.sessionFiles) === false) { loadSessions(); return; }
+  S.sessionFiles.sort((a, b) => b.lastModified - a.lastModified);
+  renderSessions(($('sessions-search')?.value || '').trim());
+}
+
+// Update a session record in place after a folder rename (copy+delete on disk).
+// Returns false if the record isn't in the index yet (caller does a full scan).
+function renameSessionRecord(list, oldDir, renamed) {
+  const rec = list.find(f => f.dirName === oldDir);
+  if (!rec) return false;
+  rec.dirName = renamed.name;
+  rec.name = renamed.name + '.txt';
+  rec.dirHandle = renamed.dirHandle;
+  if (rec.aiFile) rec.aiFile = renamed.name + rec.aiFile.slice(oldDir.length);
+  // hasWebm is unchanged — the audio moved with the folder
+}
+
 async function loadSessions() {
   if (!S.dirHandle) return;
+  renderSessionsSkeleton();
 
   const files = [];
   try {
@@ -4606,13 +4655,11 @@ async function loadSessions() {
       const aiName = entryName + '_ai.txt';
       const aiFile = sessionFiles.has(dgName) ? dgName : sessionFiles.has(groqName) ? groqName : sessionFiles.has(aiName) ? aiName : null;
 
-      let webmSize = null;
-      const webmName = entryName + '.webm';
-      if (sessionFiles.has(webmName)) {
-        try { webmSize = (await sessionFiles.get(webmName).getFile()).size; } catch {}
-      }
+      // Only detect audio presence (cheap Map lookup) — exact sizes are read
+      // on demand via the ℹ️ menu, not for all sessions on every load
+      const hasWebm = sessionFiles.has(entryName + '.webm');
 
-      files.push({ name: baseTxt, dirName: entryName, dirHandle: h, lastModified, aiFile, webmSize });
+      files.push({ name: baseTxt, dirName: entryName, dirHandle: h, lastModified, aiFile, hasWebm });
     }
   } catch(e) { console.error('list sessions', e); return; }
 
@@ -4640,11 +4687,14 @@ function renderSessions(query = '') {
   const yesterdayDate = new Date(); yesterdayDate.setDate(yesterdayDate.getDate() - 1);
   const yesterdayStr = yesterdayDate.toLocaleDateString(dateLocale, { day: 'numeric', month: 'long', year: 'numeric' });
 
-  let lastDay = null;
-  let counter = 0;
+  // Expose the currently-rendered (filtered) list so the delegated click handler
+  // can resolve an item to its record (incl. live dirHandle) via data-idx
+  S._renderedSessions = files;
 
-  for (const { name, dirName, dirHandle, lastModified, aiFile, webmSize } of files) {
-    counter++;
+  let lastDay = null;
+  const frag = document.createDocumentFragment();
+
+  files.forEach(({ name, dirName, dirHandle, lastModified, aiFile, hasWebm }, idx) => {
     const d = new Date(lastModified);
     const dayStr = d.toLocaleDateString(_lang === 'ru' ? 'ru-RU' : 'en-US', { day: 'numeric', month: 'long', year: 'numeric' });
     const dayLabel = dayStr === todayStr ? t('sessions_today') : dayStr === yesterdayStr ? t('sessions_yesterday') : dayStr;
@@ -4654,12 +4704,13 @@ function renderSessions(query = '') {
       const hdr = document.createElement('div');
       hdr.className = 'sess-day-header';
       hdr.textContent = dayLabel;
-      list.appendChild(hdr);
+      frag.appendChild(hdr);
     }
 
     const timeStr = d.toLocaleTimeString(_lang === 'ru' ? 'ru-RU' : 'en-US', { hour: '2-digit', minute: '2-digit' });
     const item = document.createElement('div');
     item.className = 'sess-item';
+    item.dataset.idx = idx;
 
     // Format display name: strip date prefix for title, show as clean name
     const nameNoExt = name.replace(/\.[^.]+$/, '');
@@ -4670,12 +4721,12 @@ function renderSessions(query = '') {
       : escHtml(titlePart);
     const ext = name.match(/\.([^.]+)$/)?.[1]?.toUpperCase() || '';
     const aiLabel = aiFile ? (aiFile.endsWith('_dg.txt') ? ' · DG' : aiFile.endsWith('_groq.txt') ? ' · Groq' : ' · AI') : '';
-    const sizeLabel = webmSize != null ? ` · ${(webmSize / 1024 / 1024).toFixed(1)} MB` : '';
+    const audioLabel = hasWebm ? ` · <span title="${t('sessions_has_audio')}">🎧</span>` : '';
 
     item.innerHTML = `
       <div class="sess-name" title="${escHtml(aiFile || name)}">
         <span class="sess-title">${displayTitle}</span>
-        <span class="sess-meta">${timeStr} · ${ext}${sizeLabel}${aiLabel}</span>
+        <span class="sess-meta">${timeStr} · ${ext}${audioLabel}${aiLabel}</span>
       </div>
       <div class="sess-actions">
         ${name.endsWith('.txt') ? `<button data-action="summarize" title="${t('sessions_btn_summarize_title')}">✨</button>` : ''}
@@ -4684,15 +4735,11 @@ function renderSessions(query = '') {
         ${name.endsWith('.txt') ? `<button data-action="analyze-screens" title="${t('sessions_btn_analyze_screens_title')}">🖼</button>` : ''}
         <button class="sess-more-btn ghost" data-action="more" title="⋯">⋯</button>
       </div>`;
-    item.querySelector('.sess-name').addEventListener('click', () => handleSessionAction('view', name, item, aiFile, dirHandle));
-    item.querySelectorAll('[data-action]').forEach(btn => {
-      btn.addEventListener('click', e => {
-        e.stopPropagation();
-        handleSessionAction(btn.dataset.action, name, btn, aiFile, dirHandle);
-      });
-    });
-    list.appendChild(item);
-  }
+    // Clicks are handled by a single delegated listener on #sessions-list (see init)
+    frag.appendChild(item);
+  });
+
+  list.appendChild(frag);
 }
 
 
@@ -5320,7 +5367,7 @@ async function transcribeAudioWithGroq(txtName, dirHandle = S.dirHandle) {
     toast.appendChild(closeRow);
     setTimeout(() => removeToast(toast), 5000);
 
-    loadSessions();
+    updateSessionIndex(list => { const rec = list.find(f => f.name === txtName); if (rec) rec.aiFile = outName; });
   } catch(e) {
     if (!cancelled) showToastError(e.message);
     else removeToast(toast);
@@ -5491,7 +5538,7 @@ async function transcribeAudioWithDeepgram(txtName, dirHandle = S.dirHandle) {
     await w.close();
 
     removeToast(toast);
-    loadSessions();
+    updateSessionIndex(list => { const rec = list.find(f => f.name === txtName); if (rec) rec.aiFile = outName; });
     const durStr = dgDuration != null
       ? t('dg_audio_duration').replace('{m}', Math.floor(dgDuration / 60)).replace('{s}', String(Math.floor(dgDuration % 60)).padStart(2, '0'))
       : '';
@@ -5760,7 +5807,7 @@ async function transcribeAudioWithAI(txtName, dirHandle = S.dirHandle) {
     await w.close();
 
     removeToast(toast);
-    loadSessions();
+    updateSessionIndex(list => { const rec = list.find(f => f.name === txtName); if (rec) rec.aiFile = outName; });
     autoToast(
       `<div class="toast-title">${t('toast_ai_done')}</div>` +
       `<div style="font-size:12px;color:var(--dim)">${escHtml(outName)}</div>`,
@@ -5784,6 +5831,7 @@ function showSessMenu(name, anchorEl, aiFile, dirHandle) {
   menu.innerHTML = `
     <button data-a="dl">${t('sessions_menu_download')}</button>
     <button data-a="rename">${t('sessions_menu_rename')}</button>
+    <button data-a="info">${t('sessions_menu_info')}</button>
     ${aiFile ? `<button data-a="view-original">${t('sessions_menu_view_original')}</button>` : ''}
     <div class="menu-sep"></div>
     <button data-a="del" class="danger">${t('sessions_menu_delete')}</button>`;
@@ -5792,7 +5840,7 @@ function showSessMenu(name, anchorEl, aiFile, dirHandle) {
 
   // Position near anchor
   const r = anchorEl.getBoundingClientRect();
-  const mw = 180, mh = aiFile ? 160 : 130;
+  const mw = 180, mh = aiFile ? 195 : 165;
   let top = r.bottom + 4, left = r.right - mw;
   if (top + mh > window.innerHeight) top = r.top - mh - 4;
   if (left < 6) left = 6;
@@ -5812,6 +5860,55 @@ function showSessMenu(name, anchorEl, aiFile, dirHandle) {
   menu.querySelectorAll('[data-a]').forEach(btn => {
     btn.addEventListener('click', () => { close(); handleSessionAction(btn.dataset.a, name, anchorEl, aiFile, dirHandle); });
   });
+}
+
+// Read one session folder on demand and show every stored file with its size.
+// This is where exact byte counts live now — the list only flags audio presence.
+async function showSessionInfo(name, dirHandle = S.dirHandle) {
+  const dirName = name.replace(/\.txt$/, '');
+  const fmtBytes = b => b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB'
+    : b >= 1024 ? (b / 1024).toFixed(1) + ' KB' : b + ' B';
+
+  const toast = makeToast(`<div class="toast-title"><span class="spinner"></span> ${t('info_reading')}</div>`);
+  try {
+    const rows = [];
+    let total = 0;
+    for await (const [fname, h] of dirHandle.entries()) {
+      if (h.kind === 'file') {
+        const size = (await h.getFile()).size;
+        total += size;
+        rows.push({ label: fname, size });
+      } else if (h.kind === 'directory' && fname === 'screenshots') {
+        let n = 0, sSize = 0;
+        for await (const [, sh] of h.entries()) {
+          if (sh.kind !== 'file') continue;
+          n++; sSize += (await sh.getFile()).size;
+        }
+        if (n) { total += sSize; rows.push({ label: `screenshots/ · ${t('info_screenshots').replace('{n}', n)}`, size: sSize }); }
+      }
+    }
+    rows.sort((a, b) => b.size - a.size);
+
+    const rowsHtml = rows.map(r =>
+      `<div style="display:flex;justify-content:space-between;gap:12px;font-size:12px;padding:2px 0">
+        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(r.label)}</span>
+        <span style="color:var(--dim);flex-shrink:0">${fmtBytes(r.size)}</span>
+      </div>`).join('');
+
+    removeToast(toast);
+    const info = makeToast(`
+      <div class="toast-title">ℹ️ ${t('info_title')}</div>
+      <div style="font-size:11px;color:var(--dim);margin:2px 0 8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(dirName)}/</div>
+      ${rowsHtml}
+      <div style="display:flex;justify-content:space-between;gap:12px;font-size:12px;font-weight:700;border-top:1px solid var(--border);margin-top:6px;padding-top:6px">
+        <span>${t('info_total')}</span><span>${fmtBytes(total)}</span>
+      </div>
+      <div class="toast-btns"><button id="info-close">OK</button></div>`);
+    info.querySelector('#info-close').onclick = () => removeToast(info);
+  } catch(e) {
+    removeToast(toast);
+    showError(t('error_recording') + e.message);
+  }
 }
 
 async function openFileOverlay(fileName, dirHandle = S.dirHandle, baseTxtName = null) {
@@ -6177,6 +6274,7 @@ async function deleteSessionFiles(dirName) {
 
 async function handleSessionAction(action, name, anchorEl, aiFile, dirHandle = S.dirHandle) {
   if (action === 'more') { showSessMenu(name, anchorEl, aiFile, dirHandle); return; }
+  if (action === 'info') { await showSessionInfo(name, dirHandle); return; }
   if (action === 'view') {
     await openFileOverlay(aiFile || name, dirHandle, aiFile ? name : null);
     return;
@@ -6299,7 +6397,7 @@ async function handleSessionAction(action, name, anchorEl, aiFile, dirHandle = S
       icon: '🗑', title: t('confirm_delete_title'), sub: `${dirName}/${t('confirm_delete_sub_suffix')}`,
       okLabel: t('confirm_delete_ok'), okClass: 'danger',
       onOk: async () => {
-        try { await deleteSessionFiles(dirName); loadSessions(); }
+        try { await deleteSessionFiles(dirName); updateSessionIndex(list => { const i = list.findIndex(f => f.dirName === dirName); if (i >= 0) list.splice(i, 1); }); }
         catch(e) { showError(t('error_delete') + e.message); }
       }
     });
@@ -6448,7 +6546,29 @@ function bindEvents() {
   $('btn-mic-mute').addEventListener('click', toggleMicMute);
   $('btn-screenshot').addEventListener('click', () => captureManualScreenshot());
   $('btn-refresh').addEventListener('click', loadSessions);
-  $('sessions-search').addEventListener('input', e => renderSessions(e.target.value.trim()));
+
+  // Single delegated click handler for the whole session list — resolves the
+  // clicked item to its record via data-idx (avoids ~2000 per-item listeners)
+  $('sessions-list').addEventListener('click', e => {
+    const item = e.target.closest('.sess-item');
+    if (!item) return;
+    const rec = (S._renderedSessions || [])[+item.dataset.idx];
+    if (!rec) return;
+    const actionBtn = e.target.closest('[data-action]');
+    if (actionBtn) {
+      e.stopPropagation();
+      handleSessionAction(actionBtn.dataset.action, rec.name, actionBtn, rec.aiFile, rec.dirHandle);
+    } else if (e.target.closest('.sess-name')) {
+      handleSessionAction('view', rec.name, item, rec.aiFile, rec.dirHandle);
+    }
+  });
+
+  let _searchDebounce;
+  $('sessions-search').addEventListener('input', e => {
+    const val = e.target.value.trim();
+    clearTimeout(_searchDebounce);
+    _searchDebounce = setTimeout(() => renderSessions(val), 150);
+  });
 
   // ── Search toggle ──
   const searchPanel = $('panel-search');
