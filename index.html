@@ -571,6 +571,7 @@
       animation: sessIn 0.18s ease both;
     }
     .sess-item:hover { background: var(--bg3); }
+    #sessions-list.no-anim .sess-item { animation: none; }
     .sess-name {
       font-size: 12.5px; overflow: hidden; text-overflow: ellipsis;
       white-space: nowrap; font-weight: 500; flex: 1; min-width: 0;
@@ -4623,11 +4624,24 @@ function renameSessionRecord(list, oldDir, renamed) {
   // hasWebm is unchanged — the audio moved with the folder
 }
 
+// Run async fn over items with a bounded number of concurrent workers.
+// Unbounded Promise.all over hundreds of File System Access handles floods the
+// browser IPC channel and can be slower than a moderate pool.
+async function mapLimit(items, limit, fn) {
+  let i = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (i < items.length) { const idx = i++; await fn(items[idx], idx); }
+  });
+  await Promise.all(workers);
+}
+
 async function loadSessions() {
   if (!S.dirHandle) return;
   renderSessionsSkeleton();
+  const t0 = performance.now();
 
-  // Phase 1: quickly collect candidate session folders (single root enumeration)
+  // Phase 1: a single cheap pass over the root. Folder names alone give us the
+  // session id, date and time — enough to paint the whole list immediately.
   const dirs = [];
   try {
     for await (const [entryName, h] of S.dirHandle.entries()) {
@@ -4637,47 +4651,61 @@ async function loadSessions() {
       dirs.push([entryName, h]);
     }
   } catch(e) { console.error('list sessions', e); return; }
+  const t1 = performance.now();
 
-  // Phase 2: enumerate every folder's contents in parallel instead of one-by-one
-  const records = await Promise.all(dirs.map(async ([entryName, h]) => {
-    const sessionFiles = new Map();
-    try {
-      for await (const [fname, fh] of h.entries()) {
-        if (fh.kind === 'file') sessionFiles.set(fname, fh);
-      }
-    } catch { return null; }
-
-    const baseTxt = entryName + '.txt';
-    if (!sessionFiles.has(baseTxt)) return null;
-
+  const byDir = new Map();
+  const files = dirs.map(([entryName, h]) => {
     const m = entryName.match(/^(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})/);
-    const lastModified = m
-      ? new Date(+m[1], +m[2]-1, +m[3], +m[4], +m[5]).getTime()
-      : (await sessionFiles.get(baseTxt).getFile()).lastModified;
-
-    const dgName = entryName + '_dg.txt';
-    const groqName = entryName + '_groq.txt';
-    const aiName = entryName + '_ai.txt';
-    const aiFile = sessionFiles.has(dgName) ? dgName : sessionFiles.has(groqName) ? groqName : sessionFiles.has(aiName) ? aiName : null;
-
-    // Only detect audio presence (cheap Map lookup) — exact sizes are read
-    // on demand via the ℹ️ menu, not for all sessions on every load
-    const hasWebm = sessionFiles.has(entryName + '.webm');
-
-    return { name: baseTxt, dirName: entryName, dirHandle: h, lastModified, aiFile, hasWebm };
-  }));
-
-  const files = records.filter(Boolean);
+    const rec = {
+      name: entryName + '.txt', dirName: entryName, dirHandle: h,
+      lastModified: new Date(+m[1], +m[2]-1, +m[3], +m[4], +m[5]).getTime(),
+      aiFile: null, hasWebm: false,
+    };
+    byDir.set(entryName, rec);
+    return rec;
+  });
   files.sort((a, b) => b.lastModified - a.lastModified);
   S.sessionFiles = files;
-
   const q = ($('sessions-search')?.value || '').trim();
   renderSessions(q);
+  const t2 = performance.now();
+  console.log(`[loadSessions] dirs=${dirs.length} rootScan=${(t1 - t0).toFixed(0)}ms firstPaint=${(t2 - t0).toFixed(0)}ms`);
+
+  // Phase 2 (background): enumerate each folder to fill in the audio / AI badges
+  // and drop folders that lack the base .txt. Bounded concurrency keeps the UI
+  // responsive instead of freezing on the whole scan.
+  const invalid = [];
+  await mapLimit(dirs, 32, async ([entryName, h]) => {
+    const sf = new Set();
+    try {
+      for await (const [fname, fh] of h.entries()) { if (fh.kind === 'file') sf.add(fname); }
+    } catch { return; }
+    const rec = byDir.get(entryName);
+    if (!rec) return;
+    if (!sf.has(entryName + '.txt')) { invalid.push(entryName); return; }
+    rec.aiFile = sf.has(entryName + '_dg.txt') ? entryName + '_dg.txt'
+      : sf.has(entryName + '_groq.txt') ? entryName + '_groq.txt'
+      : sf.has(entryName + '_ai.txt') ? entryName + '_ai.txt' : null;
+    rec.hasWebm = sf.has(entryName + '.webm');
+  });
+
+  if (invalid.length) {
+    const bad = new Set(invalid);
+    S.sessionFiles = S.sessionFiles.filter(f => !bad.has(f.dirName));
+  }
+  // Re-render with badges; keep scroll position and skip the slide-in animation
+  const list = $('sessions-list');
+  const sc = list ? list.scrollTop : 0;
+  renderSessions(($('sessions-search')?.value || '').trim(), false);
+  if (list) list.scrollTop = sc;
+  console.log(`[loadSessions] enrich=${(performance.now() - t2).toFixed(0)}ms total=${(performance.now() - t0).toFixed(0)}ms`);
 }
 
-function renderSessions(query = '') {
+function renderSessions(query = '', animate = true) {
   const list = $('sessions-list');
   list.innerHTML = '';
+  // Suppress the per-item slide-in on background re-renders (e.g. badge enrich)
+  list.classList.toggle('no-anim', !animate);
 
   const q = query.toLowerCase();
   const files = (S.sessionFiles || []).filter(f => !q || f.name.toLowerCase().includes(q));
