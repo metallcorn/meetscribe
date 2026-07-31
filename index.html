@@ -1939,10 +1939,15 @@ const S = {
 // ─────────────────────────────────────────────
 function openDB() {
   return new Promise((res, rej) => {
-    const r = indexedDB.open('meetscribe', 1);
-    r.onupgradeneeded = e => e.target.result.createObjectStore('handles');
+    const r = indexedDB.open('meetscribe', 2);
+    r.onupgradeneeded = e => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains('handles')) db.createObjectStore('handles');
+      if (!db.objectStoreNames.contains('cache'))   db.createObjectStore('cache');
+    };
     r.onsuccess = e => res(e.target.result);
     r.onerror   = e => rej(e.target.error);
+    r.onblocked = () => rej(new Error('db upgrade blocked by another tab'));
   });
 }
 
@@ -1960,6 +1965,30 @@ async function dbLoad() {
   const db = await openDB();
   return new Promise((res, rej) => {
     const r = db.transaction('handles', 'readonly').objectStore('handles').get('dir');
+    r.onsuccess = e => res(e.target.result ?? null);
+    r.onerror   = e => rej(e.target.error);
+  });
+}
+
+// Session-list index cache — a display accelerator only. The filesystem stays
+// the source of truth; a missing/stale/corrupt cache is simply ignored and we
+// fall back to a full scan. Handles are NOT stored (resolved lazily on click).
+async function cacheSaveIndex(folder, sessions) {
+  const db = await openDB();
+  const lite = sessions.map(({ name, dirName, lastModified, aiFile, hasWebm }) =>
+    ({ name, dirName, lastModified, aiFile, hasWebm }));
+  return new Promise((res, rej) => {
+    const tx = db.transaction('cache', 'readwrite');
+    tx.objectStore('cache').put({ folder, sessions: lite }, 'sessionIndex');
+    tx.oncomplete = res;
+    tx.onerror    = e => rej(e.target.error);
+  });
+}
+
+async function cacheLoadIndex() {
+  const db = await openDB();
+  return new Promise((res, rej) => {
+    const r = db.transaction('cache', 'readonly').objectStore('cache').get('sessionIndex');
     r.onsuccess = e => res(e.target.result ?? null);
     r.onerror   = e => rej(e.target.error);
   });
@@ -4610,6 +4639,7 @@ function updateSessionIndex(mutator) {
   if (mutator(S.sessionFiles) === false) { loadSessions(); return; }
   S.sessionFiles.sort((a, b) => b.lastModified - a.lastModified);
   renderSessions(($('sessions-search')?.value || '').trim());
+  if (S.dirHandle) cacheSaveIndex(S.dirHandle.name, S.sessionFiles).catch(() => {});
 }
 
 // Update a session record in place after a folder rename (copy+delete on disk).
@@ -4635,13 +4665,36 @@ async function mapLimit(items, limit, fn) {
   await Promise.all(workers);
 }
 
+// Re-render preserving scroll and without replaying the slide-in animation
+function rerenderSessionsQuiet() {
+  const list = $('sessions-list');
+  const sc = list ? list.scrollTop : 0;
+  renderSessions(($('sessions-search')?.value || '').trim(), false);
+  if (list) list.scrollTop = sc;
+}
+
 async function loadSessions() {
   if (!S.dirHandle) return;
-  renderSessionsSkeleton();
   const t0 = performance.now();
+  const q = () => ($('sessions-search')?.value || '').trim();
 
-  // Phase 1: a single cheap pass over the root. Folder names alone give us the
-  // session id, date and time — enough to paint the whole list immediately.
+  // ── Instant paint from the persisted index (source of truth is still disk) ──
+  let painted = false;
+  const cached = await cacheLoadIndex().catch(() => null);
+  const cachedBadges = new Map();
+  if (cached && cached.folder === S.dirHandle.name && Array.isArray(cached.sessions) && cached.sessions.length) {
+    for (const s of cached.sessions) cachedBadges.set(s.dirName, s);
+    S.sessionFiles = cached.sessions
+      .map(s => ({ ...s, dirHandle: null }))          // handle resolved lazily on click
+      .sort((a, b) => b.lastModified - a.lastModified);
+    renderSessions(q(), true);
+    painted = true;
+    console.log(`[loadSessions] cache paint: ${cached.sessions.length} in ${(performance.now() - t0).toFixed(0)}ms`);
+  } else {
+    renderSessionsSkeleton();
+  }
+
+  // ── Phase 1: authoritative single pass over the root ──
   const dirs = [];
   try {
     for await (const [entryName, h] of S.dirHandle.entries()) {
@@ -4656,24 +4709,25 @@ async function loadSessions() {
   const byDir = new Map();
   const files = dirs.map(([entryName, h]) => {
     const m = entryName.match(/^(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})/);
+    const prev = cachedBadges.get(entryName);   // reuse last-known badges to avoid a flash
     const rec = {
       name: entryName + '.txt', dirName: entryName, dirHandle: h,
       lastModified: new Date(+m[1], +m[2]-1, +m[3], +m[4], +m[5]).getTime(),
-      aiFile: null, hasWebm: false,
+      aiFile: prev ? prev.aiFile : null, hasWebm: prev ? prev.hasWebm : false,
     };
     byDir.set(entryName, rec);
     return rec;
   });
   files.sort((a, b) => b.lastModified - a.lastModified);
   S.sessionFiles = files;
-  const q = ($('sessions-search')?.value || '').trim();
-  renderSessions(q);
+  // If the cache already showed exactly this set, don't repaint — clicks resolve
+  // handles lazily and Phase 2 will render once at the end with final badges.
+  const sameSet = painted && files.length === cachedBadges.size && files.every(f => cachedBadges.has(f.dirName));
+  if (!sameSet) { renderSessions(q(), !painted); painted = true; }
   const t2 = performance.now();
-  console.log(`[loadSessions] dirs=${dirs.length} rootScan=${(t1 - t0).toFixed(0)}ms firstPaint=${(t2 - t0).toFixed(0)}ms`);
+  console.log(`[loadSessions] dirs=${dirs.length} rootScan=${(t1 - t0).toFixed(0)}ms paint=${(t2 - t0).toFixed(0)}ms`);
 
-  // Phase 2 (background): enumerate each folder to fill in the audio / AI badges
-  // and drop folders that lack the base .txt. Bounded concurrency keeps the UI
-  // responsive instead of freezing on the whole scan.
+  // ── Phase 2 (background): confirm audio/AI badges, drop non-session folders ──
   const invalid = [];
   await mapLimit(dirs, 32, async ([entryName, h]) => {
     const sf = new Set();
@@ -4693,11 +4747,10 @@ async function loadSessions() {
     const bad = new Set(invalid);
     S.sessionFiles = S.sessionFiles.filter(f => !bad.has(f.dirName));
   }
-  // Re-render with badges; keep scroll position and skip the slide-in animation
-  const list = $('sessions-list');
-  const sc = list ? list.scrollTop : 0;
-  renderSessions(($('sessions-search')?.value || '').trim(), false);
-  if (list) list.scrollTop = sc;
+  rerenderSessionsQuiet();
+
+  // Persist the fresh index for the next cold open (best-effort)
+  cacheSaveIndex(S.dirHandle.name, S.sessionFiles).catch(() => {});
   console.log(`[loadSessions] enrich=${(performance.now() - t2).toFixed(0)}ms total=${(performance.now() - t0).toFixed(0)}ms`);
 }
 
@@ -6582,18 +6635,22 @@ function bindEvents() {
 
   // Single delegated click handler for the whole session list — resolves the
   // clicked item to its record via data-idx (avoids ~2000 per-item listeners)
-  $('sessions-list').addEventListener('click', e => {
+  $('sessions-list').addEventListener('click', async e => {
     const item = e.target.closest('.sess-item');
     if (!item) return;
     const rec = (S._renderedSessions || [])[+item.dataset.idx];
     if (!rec) return;
     const actionBtn = e.target.closest('[data-action]');
-    if (actionBtn) {
-      e.stopPropagation();
-      handleSessionAction(actionBtn.dataset.action, rec.name, actionBtn, rec.aiFile, rec.dirHandle);
-    } else if (e.target.closest('.sess-name')) {
-      handleSessionAction('view', rec.name, item, rec.aiFile, rec.dirHandle);
+    if (actionBtn) e.stopPropagation();
+    else if (!e.target.closest('.sess-name')) return;
+    // Records painted from the cache have no live handle yet — resolve it now
+    let dh = rec.dirHandle;
+    if (!dh) {
+      try { dh = rec.dirHandle = await S.dirHandle.getDirectoryHandle(rec.dirName); }
+      catch { return; }   // folder gone (deleted since cache) — background scan will drop it
     }
+    if (actionBtn) handleSessionAction(actionBtn.dataset.action, rec.name, actionBtn, rec.aiFile, dh);
+    else handleSessionAction('view', rec.name, item, rec.aiFile, dh);
   });
 
   let _searchDebounce;
