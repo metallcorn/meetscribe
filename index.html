@@ -5524,12 +5524,13 @@ async function transcribeAudioWithDeepgram(txtName, dirHandle = S.dirHandle) {
     catch { throw new Error(t('error_audio_file_not_found') + webmName); }
     const file = await fh.getFile();
 
-    // Build URL — keywords with boost weight for Nova-2/Nova-3
+    // Build URL — keyterms for Nova-3. Dedupe: the glossary often has repeats,
+    // and every term bloats the URL, making a long upload more fragile.
     const glossary = getGlossary();
-    const kwParams = glossary.trim()
-      ? glossary.split(/[\n,]+/).map(t => t.trim()).filter(t => t.length >= 2)
-          .map(t => `&keyterm=${encodeURIComponent(t)}`).join('')
-      : '';
+    const terms = [...new Set(
+      glossary.split(/[\n,]+/).map(term => term.trim()).filter(term => term.length >= 2)
+    )];
+    const kwParams = terms.map(term => `&keyterm=${encodeURIComponent(term)}`).join('');
     const url = `https://api.deepgram.com/v1/listen?model=nova-3&language=multi&smart_format=true&diarize=true${kwParams}`;
 
     const dgRetryDelays = [0, 8000, 20000];
@@ -5544,12 +5545,22 @@ async function transcribeAudioWithDeepgram(txtName, dirHandle = S.dirHandle) {
         }
       }
       setStatus(`${attempt > 0 ? t('dg_retry_attempt').replace('{attempt}', attempt + 1).replace('{total}', dgRetryDelays.length) : ''}${t('dg_sending').replace('{size}', (file.size / 1024 / 1024).toFixed(1))}`);
-      resp = await fetch(url, {
-        method: 'POST',
-        headers: { 'Authorization': `Token ${key}`, 'Content-Type': 'audio/webm' },
-        body: file,
-        signal: abortCtrl.signal,
-      });
+      try {
+        resp = await fetch(url, {
+          method: 'POST',
+          headers: { 'Authorization': `Token ${key}`, 'Content-Type': 'audio/webm' },
+          body: file,
+          signal: abortCtrl.signal,
+        });
+      } catch (netErr) {
+        // fetch() rejects (not an HTTP status) on network drops — e.g.
+        // net::ERR_NETWORK_CHANGED when Wi-Fi/VPN flips mid-upload. Retry these
+        // too, don't just bail. AbortError = the user cancelled.
+        if (netErr.name === 'AbortError' || cancelled) return;
+        if (attempt === dgRetryDelays.length - 1) throw new Error(t('error_network') + ' (' + netErr.message + ')');
+        setStatus(t('dg_network_retry'));
+        continue;
+      }
       if (resp.ok) break;
       const errText = await resp.text().catch(() => '');
       if (resp.status !== 429 && resp.status !== 503) throw new Error(`Deepgram HTTP ${resp.status}: ${errText.slice(0, 200)}`);
