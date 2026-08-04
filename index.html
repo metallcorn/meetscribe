@@ -592,22 +592,23 @@
       display: block; font-size: 10.5px; color: var(--dim); font-weight: 400; margin-top: 2px;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
-    /* Right side: one quiet "next step" CTA + a ⋯ that appears on hover */
+    /* Right side: a ‹ action › carousel + a ⋯ that appears on hover */
     .sess-actions { display: flex; gap: 4px; flex-shrink: 0; align-items: center; position: relative; z-index: 1; }
-    .sess-cta {
+    .sess-cycler { display: inline-flex; align-items: center; gap: 1px; }
+    .sess-cyc-arrow {
+      background: none !important; border: none !important; color: var(--dim) !important;
+      font-size: 15px !important; padding: 0 3px !important; line-height: 1;
+      opacity: 0.35; transition: opacity 0.12s, color 0.12s;
+    }
+    .sess-item:hover .sess-cyc-arrow { opacity: 0.7; }
+    .sess-cyc-arrow:hover { color: var(--text) !important; opacity: 1 !important; }
+    .sess-cyc-act {
       font-size: 11.5px; font-weight: 500; padding: 4px 11px; border-radius: 999px;
       background: transparent; color: var(--accent2); border: 1px solid transparent;
       white-space: nowrap; transition: background 0.12s, border-color 0.12s, color 0.12s;
     }
-    .sess-item:hover .sess-cta { border-color: var(--border); background: var(--bg2); }
-    .sess-cta:hover { background: var(--accent) !important; color: #fff !important; border-color: transparent !important; }
-    .sess-skip {
-      background: none !important; border: none !important; color: var(--dim) !important;
-      font-size: 11px !important; padding: 2px 5px !important; line-height: 1;
-      opacity: 0; transition: opacity 0.12s, color 0.12s;
-    }
-    .sess-item:hover .sess-skip { opacity: 0.6; }
-    .sess-skip:hover { color: var(--danger) !important; opacity: 1 !important; }
+    .sess-item:hover .sess-cyc-act { border-color: var(--border); background: var(--bg2); }
+    .sess-cyc-act:hover { background: var(--accent) !important; color: #fff !important; border-color: transparent !important; }
     .sess-more-btn { padding: 2px 7px !important; font-size: 16px !important; line-height: 1; color: var(--dim) !important; opacity: 0; transition: opacity 0.12s; }
     .sess-item:hover .sess-more-btn, .sess-more-btn:focus-visible { opacity: 1; }
     .sess-more-btn:hover { color: var(--text) !important; }
@@ -620,7 +621,7 @@
     }
     @keyframes sessBuild { from { background-position: 200% 0; } to { background-position: -120% 0; } }
     .sess-proc { display: none; align-items: center; gap: 6px; font-size: 11px; font-weight: 500; color: var(--accent2); white-space: nowrap; }
-    .sess-item.processing .sess-cta { display: none; }
+    .sess-item.processing .sess-cycler { display: none; }
     .sess-item.processing .sess-more-btn { opacity: 1; }
     .sess-item.processing .sess-proc { display: inline-flex; }
     .sess-proc-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: procPulse 1s ease-in-out infinite; }
@@ -4953,15 +4954,14 @@ function setSkip(dirName, step, on) {
   localStorage.setItem('meetscribe_skipped', JSON.stringify(s));
 }
 
-// The single recommended "next step" for a session, from cheap signals.
-// Only nudge when something is genuinely pending (audio, no accurate transcript,
-// not skipped). Otherwise no CTA — the row is a clean note you open; launching,
-// skipping or re-running individual steps lives in the detail view.
-function sessNextStep({ hasWebm, aiFile, dirName }) {
-  if (hasWebm && !aiFile && !isSkipped(dirName, 'transcript'))
-    return { action: 'ai-transcribe', label: t('sess_cta_transcript') };
-  return null;
-}
+// Actions the list carousel flips through (‹ › in each row). Same set the ⋯ menu
+// and detail view expose, but reachable straight from the list.
+const SESS_CYCLE = [
+  { action: 'ai-transcribe',   key: 'sess_cyc_transcript' },
+  { action: 'analyze-screens', key: 'sess_cyc_screens' },
+  { action: 'summarize',       key: 'sess_cyc_summary' },
+  { action: 'chat',            key: 'sess_cyc_chat' },
+];
 
 // A session is "processing" if any background op is registered for it
 function isSessionProcessing(dirName) {
@@ -5033,8 +5033,10 @@ function renderSessions(query = '', animate = true) {
     const aiLabel = aiFile ? (aiFile.endsWith('_dg.txt') ? ' · DG' : aiFile.endsWith('_groq.txt') ? ' · Groq' : ' · AI') : '';
     const audioLabel = hasWebm ? ' · WEBM' : '';
 
-    // One recommended "next step" (coarse — precise pipeline lives in the detail view)
-    const cta = sessNextStep({ hasWebm, aiFile, dirName });
+    // Action carousel: flip through pipeline actions with ‹ ›, click the label to run.
+    // Default to the recommended step (transcribe when audio has no accurate transcript).
+    const cycI = (hasWebm && !aiFile) ? 0 : 2;
+    const act = SESS_CYCLE[cycI];
 
     item.innerHTML = `
       <div class="sess-name" title="${escHtml(aiFile || name)}">
@@ -5042,7 +5044,11 @@ function renderSessions(query = '', animate = true) {
         <span class="sess-meta">${timeStr} · ${ext}${audioLabel}${aiLabel}</span>
       </div>
       <div class="sess-actions">
-        ${cta ? `<button class="sess-cta" data-action="${cta.action}">${cta.label}</button><button class="sess-skip" data-action="skip-transcript" title="${t('sess_skip_title')}">✕</button>` : ''}
+        <div class="sess-cycler" data-i="${cycI}">
+          <button class="sess-cyc-arrow" data-cyc-nav="-1" title="‹">‹</button>
+          <button class="sess-cyc-act" data-action="${act.action}">${t(act.key)}</button>
+          <button class="sess-cyc-arrow" data-cyc-nav="1" title="›">›</button>
+        </div>
         <span class="sess-proc"><span class="sess-proc-dot"></span>${t('sess_processing')}</span>
         <button class="sess-more-btn ghost" data-action="more" title="⋯">⋯</button>
       </div>`;
@@ -6969,6 +6975,18 @@ function bindEvents() {
     if (!item) return;
     const rec = (S._renderedSessions || [])[+item.dataset.idx];
     if (!rec) return;
+    // ‹ › carousel: flip which action the center button runs (no execution)
+    const nav = e.target.closest('[data-cyc-nav]');
+    if (nav) {
+      e.stopPropagation();
+      const cyc = nav.closest('.sess-cycler');
+      const i = ((+cyc.dataset.i) + (+nav.dataset.cycNav) + SESS_CYCLE.length) % SESS_CYCLE.length;
+      cyc.dataset.i = i;
+      const centre = cyc.querySelector('.sess-cyc-act');
+      centre.dataset.action = SESS_CYCLE[i].action;
+      centre.textContent = t(SESS_CYCLE[i].key);
+      return;
+    }
     const actionBtn = e.target.closest('[data-action]');
     if (actionBtn) e.stopPropagation();
     else if (!e.target.closest('.sess-name')) return;
