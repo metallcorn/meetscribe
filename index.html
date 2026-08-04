@@ -711,6 +711,20 @@
       font-family: 'JetBrains Mono', 'Consolas', monospace;
       font-size: 12px; white-space: pre-wrap; word-wrap: break-word;
     }
+    /* Detail-view pipeline guide */
+    .ov-pipeline {
+      display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center;
+      padding: 11px 15px; margin-bottom: 16px;
+      background: var(--bg2); border: 1px solid var(--border); border-radius: 12px;
+    }
+    .ov-pl-chip { display: flex; align-items: center; gap: 9px; font-size: 12px; }
+    .ov-pl-chip:not(:last-child) { padding-right: 14px; border-right: 1px solid var(--border); }
+    .ov-pl-status { color: var(--dim); white-space: nowrap; }
+    .ov-pl-btn {
+      font-size: 12px; font-weight: 500; padding: 4px 12px; border-radius: 999px;
+      background: var(--accent); color: #fff; border: none; white-space: nowrap; cursor: pointer;
+    }
+    .ov-pl-btn:hover { filter: brightness(1.08); }
     .ov-meta { color: var(--dim); font-size: 11px; margin-bottom: 12px; }
 
     /* ── Find bar ─────────────────────────────────────── */
@@ -6103,6 +6117,59 @@ async function showSessionInfo(name, dirHandle = S.dirHandle) {
   }
 }
 
+// Pipeline-guide bar for the detail view: reflects the session's real state
+// (transcript / screens / summary) and surfaces the relevant next steps — so a
+// user who never did live capture still sees "process the recording", and knows
+// to recognize screens before summarizing.
+async function buildPipelineBar(mergedText, fileName, dirHandle, baseTxtName) {
+  const bar = document.createElement('div');
+  bar.className = 'ov-pipeline';
+
+  const baseName = baseTxtName || fileName;             // session base .txt
+  const aiFileName = baseTxtName ? fileName : null;     // accurate transcript file, if shown
+  const hasAccurate = !!baseTxtName || /_(dg|ai|groq)\.txt$/.test(fileName);
+
+  let hasWebm = false;
+  try { await dirHandle.getFileHandle(dirHandle.name + '.webm'); hasWebm = true; } catch {}
+
+  const bodyText = mergedText.replace(/^[\s\S]*?\n---\n/, '');   // drop MeetScribe header
+  const hasLines = /\[\d+:\d+:\d+\]/.test(bodyText);
+  const unanalyzed = (mergedText.match(/\[SCREENSHOT:/g) || []).length;
+  const analyzed = (mergedText.match(/\[SCREEN:/g) || []).length;
+  const hasSummary = /^\s*#/.test(mergedText);
+
+  const chip = (statusHtml, btn) => {
+    const c = document.createElement('div');
+    c.className = 'ov-pl-chip';
+    c.innerHTML = `<span class="ov-pl-status">${statusHtml}</span>`;
+    if (btn) {
+      const b = document.createElement('button');
+      b.className = 'ov-pl-btn';
+      b.textContent = btn.label;
+      b.onclick = () => handleSessionAction(btn.action, baseName, b, aiFileName, dirHandle);
+      c.appendChild(b);
+    }
+    return c;
+  };
+
+  const trStatus = hasAccurate ? '✓ ' + t('ov_pl_transcript_accurate')
+    : hasLines ? t('ov_pl_transcript_draft')
+    : t('ov_pl_transcript_empty');
+  bar.appendChild(chip(trStatus, (!hasAccurate && hasWebm) ? { action: 'ai-transcribe', label: t('ov_pl_improve') } : null));
+
+  if (unanalyzed > 0) {
+    bar.appendChild(chip(t('ov_pl_screens_todo').replace('{n}', unanalyzed), { action: 'analyze-screens', label: t('ov_pl_screens_btn') }));
+  } else if (analyzed > 0) {
+    bar.appendChild(chip('✓ ' + t('ov_pl_screens_done'), null));
+  }
+
+  bar.appendChild(hasSummary
+    ? chip('✓ ' + t('ov_pl_summary_done'), null)
+    : chip(t('ov_pl_summary_none'), { action: 'summarize', label: t('ov_pl_summary_btn') }));
+
+  return bar;
+}
+
 async function openFileOverlay(fileName, dirHandle = S.dirHandle, baseTxtName = null) {
   const text = await readSessionFile(fileName, dirHandle);
   if (text === null) return;
@@ -6120,6 +6187,9 @@ async function openFileOverlay(fileName, dirHandle = S.dirHandle, baseTxtName = 
       const baseText = await readSessionFile(baseTxtName, dirHandle, true);
       if (baseText) mergedText = mergeScreenshotLines(text, baseText);
     }
+    // ── Pipeline guide: show where this session stands + the next steps ──
+    body.appendChild(await buildPipelineBar(mergedText, fileName, dirHandle, baseTxtName, ov));
+
     const txDiv = renderTranscriptTxt(mergedText, dirHandle);
     // Mark screenshot cards that came from base file (not editable in AI file save)
     if (baseTxtName && baseTxtName !== fileName) {
