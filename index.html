@@ -1280,8 +1280,12 @@
     .ob-filetree {
       background: var(--bg3); border: 1px solid var(--border); border-radius: 10px;
       padding: 12px 16px; font-family: 'JetBrains Mono', 'Consolas', monospace;
-      font-size: 12px; color: var(--dim); line-height: 1.75; margin-bottom: 16px;
-      white-space: pre;
+      font-size: 12px; color: var(--dim); line-height: 1.75; margin-bottom: 10px;
+      white-space: pre; overflow-x: auto;
+    }
+    .ob-note {
+      font-size: 11.5px; color: var(--dim); line-height: 1.5; text-align: center;
+      margin-top: 14px;
     }
     .ob-folder-result {
       display: none; align-items: center; gap: 10px;
@@ -7497,9 +7501,11 @@ function applyOnboardingTranslations() {
   $('ob-f2-sub').textContent = t('ob_f2_sub');
   $('ob-f3-title').textContent = t('ob_f3_title');
   $('ob-f3-sub').textContent = t('ob_f3_sub');
+  $('ob-browser-note').textContent = t('ob_browser_note');
   $('ob-title-2').textContent = t('ob_title_2');
   $('ob-sub-2').textContent = t('ob_sub_2');
   $('ob-filetree').innerHTML = t('ob_filetree');
+  $('ob-tree-note').textContent = t('ob_tree_note');
   $('ob-btn-pick').textContent = t('ob_btn_pick_folder');
   $('ob-skip-folder').textContent = t('ob_skip');
   $('ob-title-3').textContent = t('ob_title_3');
@@ -7657,6 +7663,7 @@ document.addEventListener('visibilitychange', () => {
             </div>
           </div>
         </div>
+        <div class="ob-note" id="ob-browser-note"></div>
       </div>
 
       <!-- Step 2: Choose folder -->
@@ -7664,6 +7671,7 @@ document.addEventListener('visibilitychange', () => {
         <div class="ob-title" id="ob-title-2"></div>
         <div class="ob-sub" id="ob-sub-2"></div>
         <div class="ob-filetree" id="ob-filetree"></div>
+        <div class="ob-note" id="ob-tree-note" style="margin-top:0;margin-bottom:14px"></div>
         <div class="ob-folder-result" id="ob-folder-result">
           <div class="ob-folder-result-icon">✅</div>
           <div>
