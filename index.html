@@ -1519,6 +1519,19 @@
     </div>
 
     <div class="drawer-section">
+      <div class="drawer-section-title" id="settings-audiosrc-title">Источник звука</div>
+      <div class="drawer-row">
+        <span class="drawer-label" id="audiosrc-label">Источник</span>
+        <select id="audio-source"><option value="tab">Вкладка браузера</option></select>
+      </div>
+      <div class="drawer-row" style="margin-top:2px">
+        <button id="btn-audiosrc-detect" class="ghost" style="font-size:12px;flex:1">🎤 Показать устройства</button>
+      </div>
+      <div class="drawer-hint" id="audiosrc-hint"></div>
+      <div class="drawer-hint" id="audiosrc-warn" style="display:none;color:var(--danger)"></div>
+    </div>
+
+    <div class="drawer-section">
       <div class="drawer-section-title glossary-title">Глоссарий</div>
       <div class="drawer-hint glossary-hint" style="margin-bottom:8px">Термины помогают ASR точнее распознать специфичные слова</div>
       <textarea id="glossary-input"
@@ -1869,6 +1882,12 @@ function applyTranslations() {
   set('btn-restore', 'restore_btn');
 
   // Glossary
+  document.getElementById('settings-audiosrc-title').textContent = t('settings_audio_source_section');
+  document.getElementById('audiosrc-label').textContent = t('settings_audio_source_label');
+  document.getElementById('btn-audiosrc-detect').textContent = t('settings_audio_source_detect');
+  if ($('audio-source')?.options[0]) $('audio-source').options[0].textContent = t('settings_audio_source_tab');
+  updateAudioSrcHint();
+
   document.querySelector('.glossary-title').textContent = t('glossary_title');
   document.querySelector('.glossary-hint').textContent = t('glossary_hint');
   document.getElementById('glossary-input').placeholder = t('glossary_placeholder');
@@ -3561,42 +3580,103 @@ function showCaptureHint() {
   return el;
 }
 
+function osKind() {
+  const ua = navigator.userAgent || '';
+  if (/Macintosh|Mac OS X/i.test(ua)) return 'mac';
+  if (/Windows/i.test(ua)) return 'win';
+  return 'linux';
+}
+
+function updateAudioSrcHint() {
+  const sel = $('audio-source');
+  const hint = $('audiosrc-hint'), warn = $('audiosrc-warn');
+  if (hint) hint.innerHTML = t('settings_audio_source_hint_' + osKind());
+  if (warn) {
+    warn.innerHTML = t('settings_audio_source_warn');
+    warn.style.display = (sel && sel.value !== 'tab') ? '' : 'none';
+  }
+}
+
+// Fill the source <select> with 'tab' + real audio input devices (monitor /
+// BlackHole / VB-Cable show up here). Labels are hidden until mic permission is
+// granted, so `requestPerm` briefly opens the mic to reveal them.
+async function populateAudioSources(requestPerm = false) {
+  const sel = $('audio-source');
+  if (!sel) return;
+  if (requestPerm) {
+    try { const s = await navigator.mediaDevices.getUserMedia({ audio: true }); s.getTracks().forEach(tr => tr.stop()); } catch {}
+  }
+  let devices = [];
+  try { devices = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audioinput'); } catch {}
+  const saved = localStorage.getItem('meetscribe_audio_source') || 'tab';
+  const opts = [`<option value="tab">${escHtml(t('settings_audio_source_tab'))}</option>`];
+  devices.forEach(d => {
+    if (!d.deviceId || d.deviceId === 'default' || d.deviceId === 'communications') return;
+    const label = d.label || (t('settings_audio_source_device') + ' ' + d.deviceId.slice(0, 6));
+    opts.push(`<option value="${escHtml(d.deviceId)}">${escHtml(label)}</option>`);
+  });
+  sel.innerHTML = opts.join('');
+  sel.value = [...sel.options].some(o => o.value === saved) ? saved : 'tab';
+  updateAudioSrcHint();
+}
+
 async function startAudio() {
   S.tabTitle = '';
-  // Tab capture
-  const captureHint = showCaptureHint();
-  try {
-    S.displayStream = await navigator.mediaDevices.getDisplayMedia({ audio: true, video: true });
-    captureHint.remove();
-    // Extract tab title from video track label before stopping it
-    const vt = S.displayStream.getVideoTracks()[0];
-    if (vt) {
-      // Chrome label formats vary:
-      // "web-contents-media-stream:HEX:Tab Title" — содержит название вкладки
-      // "web-contents-media-streamHEX" или "web-contents-media-stream:HEX" — только ID, названия нет
-      let title = '';
-      const m = vt.label.match(/^web-contents-media-stream:[a-fA-F0-9]+:(.+)$/i);
-      if (m) {
-        title = m[1].trim(); // название после второго двоеточия
-      } else {
-        // пробуем убрать весь технический префикс
-        title = vt.label.replace(/^web-contents-media-stream[a-fA-F0-9:]*/i, '').replace(/^Tab:\s*/i, '').trim();
-      }
-      // если осталось пусто или нет ни одной "нормальной" буквы (только hex-символы/цифры) — не используем
-      const looksLikeId = !title || !/[g-zG-Zа-яА-ЯёЁ\s]/.test(title);
-      S.tabTitle = looksLikeId
-        ? ''
-        : title.replace(/[^a-zA-Z0-9а-яА-ЯёЁ\s\-]/g, '').replace(/\s+/g, '-').slice(0, 40);
+  const sourceMode = localStorage.getItem('meetscribe_audio_source') || 'tab';
+
+  if (sourceMode !== 'tab') {
+    // System / loopback capture via a chosen input device (PipeWire/PulseAudio
+    // monitor on Linux, BlackHole on macOS, VB-Cable/Stereo Mix on Windows).
+    // No tab video → no tab title, no screenshots; audio is captured globally.
+    try {
+      S.displayStream = await navigator.mediaDevices.getUserMedia({ audio: {
+        deviceId: { exact: sourceMode },
+        echoCancellation: false, noiseSuppression: false, autoGainControl: false,
+      } });
+    } catch(e) {
+      const msg = e.name === 'NotAllowedError'
+        ? t('error_tab_capture_denied')
+        : t('error_audio_source_failed') + e.message;
+      showError(msg);
+      throw e;
     }
-    // Keep video track alive for frame grabber; stopped later in stopAudio via displayStream
-    S.videoTrack = vt || null;
-  } catch(e) {
-    captureHint.remove();
-    const msg = e.name === 'NotAllowedError'
-      ? t('error_tab_capture_denied')
-      : t('error_tab_capture_failed') + e.message;
-    showError(msg);
-    throw e;
+    S.videoTrack = null;
+  } else {
+    // Tab capture
+    const captureHint = showCaptureHint();
+    try {
+      S.displayStream = await navigator.mediaDevices.getDisplayMedia({ audio: true, video: true });
+      captureHint.remove();
+      // Extract tab title from video track label before stopping it
+      const vt = S.displayStream.getVideoTracks()[0];
+      if (vt) {
+        // Chrome label formats vary:
+        // "web-contents-media-stream:HEX:Tab Title" — содержит название вкладки
+        // "web-contents-media-streamHEX" или "web-contents-media-stream:HEX" — только ID, названия нет
+        let title = '';
+        const m = vt.label.match(/^web-contents-media-stream:[a-fA-F0-9]+:(.+)$/i);
+        if (m) {
+          title = m[1].trim(); // название после второго двоеточия
+        } else {
+          // пробуем убрать весь технический префикс
+          title = vt.label.replace(/^web-contents-media-stream[a-fA-F0-9:]*/i, '').replace(/^Tab:\s*/i, '').trim();
+        }
+        // если осталось пусто или нет ни одной "нормальной" буквы (только hex-символы/цифры) — не используем
+        const looksLikeId = !title || !/[g-zG-Zа-яА-ЯёЁ\s]/.test(title);
+        S.tabTitle = looksLikeId
+          ? ''
+          : title.replace(/[^a-zA-Z0-9а-яА-ЯёЁ\s\-]/g, '').replace(/\s+/g, '-').slice(0, 40);
+      }
+      // Keep video track alive for frame grabber; stopped later in stopAudio via displayStream
+      S.videoTrack = vt || null;
+    } catch(e) {
+      captureHint.remove();
+      const msg = e.name === 'NotAllowedError'
+        ? t('error_tab_capture_denied')
+        : t('error_tab_capture_failed') + e.message;
+      showError(msg);
+      throw e;
+    }
   }
 
   const audioTracks = S.displayStream.getAudioTracks();
@@ -6959,8 +7039,13 @@ function bindEvents() {
   // ── Settings drawer ──
   const openDrawer  = () => { $('settings-drawer').classList.add('open'); $('settings-backdrop').classList.add('open'); };
   const closeDrawer = () => { $('settings-drawer').classList.remove('open'); $('settings-backdrop').classList.remove('open'); };
-  $('btn-settings').addEventListener('click', openDrawer);
+  $('btn-settings').addEventListener('click', () => { openDrawer(); populateAudioSources(false); });
   $('btn-settings-close').addEventListener('click', closeDrawer);
+  $('btn-audiosrc-detect').addEventListener('click', () => populateAudioSources(true));
+  $('audio-source').addEventListener('change', e => {
+    localStorage.setItem('meetscribe_audio_source', e.target.value);
+    updateAudioSrcHint();
+  });
 
   $('btn-lang').addEventListener('click', () => {
     setAppLang(getCurrentLang() === 'en' ? 'ru' : 'en');
