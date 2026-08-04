@@ -595,6 +595,13 @@
     }
     .sess-item:hover .sess-cta { border-color: var(--border); background: var(--bg2); }
     .sess-cta:hover { background: var(--accent) !important; color: #fff !important; border-color: transparent !important; }
+    .sess-skip {
+      background: none !important; border: none !important; color: var(--dim) !important;
+      font-size: 11px !important; padding: 2px 5px !important; line-height: 1;
+      opacity: 0; transition: opacity 0.12s, color 0.12s;
+    }
+    .sess-item:hover .sess-skip { opacity: 0.6; }
+    .sess-skip:hover { color: var(--danger) !important; opacity: 1 !important; }
     .sess-more-btn { padding: 2px 7px !important; font-size: 16px !important; line-height: 1; color: var(--dim) !important; opacity: 0; transition: opacity 0.12s; }
     .sess-item:hover .sess-more-btn, .sess-more-btn:focus-visible { opacity: 1; }
     .sess-more-btn:hover { color: var(--text) !important; }
@@ -732,6 +739,11 @@
       transition: color 0.12s, border-color 0.12s, transform 0.2s;
     }
     .ov-pl-redo:hover { color: var(--accent2); border-color: var(--accent2); transform: rotate(-90deg); }
+    .ov-pl-mini {
+      background: none; border: none; color: var(--dim); font-size: 11.5px;
+      padding: 4px 9px; border-radius: 999px; cursor: pointer; transition: background 0.12s, color 0.12s;
+    }
+    .ov-pl-mini:hover { background: var(--bg3); color: var(--text); }
     .ov-meta { color: var(--dim); font-size: 11px; margin-bottom: 12px; }
 
     /* ── Find bar ─────────────────────────────────────── */
@@ -4841,13 +4853,25 @@ async function loadSessions() {
   console.log(`[loadSessions] enrich=${(performance.now() - t2).toFixed(0)}ms total=${(performance.now() - t0).toFixed(0)}ms`);
 }
 
+// Per-session "I don't need this step" flags (localStorage, so no file reads).
+// Shape: { "<dirName>": { transcript:1, screens:1, summary:1 } }
+function getSkips() { try { return JSON.parse(localStorage.getItem('meetscribe_skipped') || '{}'); } catch { return {}; } }
+function isSkipped(dirName, step) { return !!(getSkips()[dirName] || {})[step]; }
+function setSkip(dirName, step, on) {
+  const s = getSkips();
+  s[dirName] = s[dirName] || {};
+  if (on) s[dirName][step] = 1;
+  else { delete s[dirName][step]; if (!Object.keys(s[dirName]).length) delete s[dirName]; }
+  localStorage.setItem('meetscribe_skipped', JSON.stringify(s));
+}
+
 // The single recommended "next step" for a session, from cheap signals.
-// Only nudge when we KNOW something is pending (audio with no accurate
-// transcript). Otherwise no CTA — the row is a clean note you open; launching
-// or re-running individual steps lives in the detail view, which reads the file
-// and knows exactly what's done.
-function sessNextStep({ hasWebm, aiFile }) {
-  if (hasWebm && !aiFile) return { action: 'ai-transcribe', label: t('sess_cta_process') };
+// Only nudge when something is genuinely pending (audio, no accurate transcript,
+// not skipped). Otherwise no CTA — the row is a clean note you open; launching,
+// skipping or re-running individual steps lives in the detail view.
+function sessNextStep({ hasWebm, aiFile, dirName }) {
+  if (hasWebm && !aiFile && !isSkipped(dirName, 'transcript'))
+    return { action: 'ai-transcribe', label: t('sess_cta_transcript') };
   return null;
 }
 
@@ -4922,7 +4946,7 @@ function renderSessions(query = '', animate = true) {
     const audioLabel = hasWebm ? ' · WEBM' : '';
 
     // One recommended "next step" (coarse — precise pipeline lives in the detail view)
-    const cta = sessNextStep({ hasWebm, aiFile });
+    const cta = sessNextStep({ hasWebm, aiFile, dirName });
 
     item.innerHTML = `
       <div class="sess-name" title="${escHtml(aiFile || name)}">
@@ -4930,7 +4954,7 @@ function renderSessions(query = '', animate = true) {
         <span class="sess-meta">${timeStr} · ${ext}${audioLabel}${aiLabel}</span>
       </div>
       <div class="sess-actions">
-        ${cta ? `<button class="sess-cta" data-action="${cta.action}">${cta.label}</button>` : ''}
+        ${cta ? `<button class="sess-cta" data-action="${cta.action}">${cta.label}</button><button class="sess-skip" data-action="skip-transcript" title="${t('sess_skip_title')}">✕</button>` : ''}
         <span class="sess-proc"><span class="sess-proc-dot"></span>${t('sess_processing')}</span>
         <button class="sess-more-btn ghost" data-action="more" title="⋯">⋯</button>
       </div>`;
@@ -6136,7 +6160,7 @@ async function showSessionInfo(name, dirHandle = S.dirHandle) {
 // (transcript / screens / summary) and surfaces the relevant next steps — so a
 // user who never did live capture still sees "process the recording", and knows
 // to recognize screens before summarizing.
-async function buildPipelineBar(mergedText, fileName, dirHandle, baseTxtName) {
+async function buildPipelineBar(mergedText, fileName, dirHandle, baseTxtName, onChange) {
   const bar = document.createElement('div');
   bar.className = 'ov-pipeline';
 
@@ -6153,50 +6177,56 @@ async function buildPipelineBar(mergedText, fileName, dirHandle, baseTxtName) {
   const analyzed = (mergedText.match(/\[SCREEN:/g) || []).length;
   const hasSummary = /^\s*#/.test(mergedText);
 
-  // opts: { build:{action,label} } → primary "launch" button (step not done);
-  //       { redo:{action} }        → done: "✓ …" + a ↻ redo button next to it.
-  const chip = (statusHtml, opts) => {
+  const dir = dirHandle.name;
+  const run = action => handleSessionAction(action, baseName, bar, aiFileName, dirHandle);
+  const skip = step => { setSkip(dir, step, true); onChange && onChange(); };
+  const unskip = step => { setSkip(dir, step, false); onChange && onChange(); };
+
+  // buttons: array of { cls, text, title?, onClick }
+  const chip = (statusHtml, buttons) => {
     const c = document.createElement('div');
     c.className = 'ov-pl-chip';
     c.innerHTML = `<span class="ov-pl-status">${statusHtml}</span>`;
-    const run = action => handleSessionAction(action, baseName, b, aiFileName, dirHandle);
-    let b;
-    if (opts && opts.build) {
-      b = document.createElement('button');
-      b.className = 'ov-pl-btn';
-      b.textContent = opts.build.label;
-      b.onclick = () => run(opts.build.action);
+    (buttons || []).forEach(bt => {
+      const b = document.createElement('button');
+      b.className = bt.cls;
+      b.textContent = bt.text;
+      if (bt.title) b.title = bt.title;
+      b.onclick = bt.onClick;
       c.appendChild(b);
-    } else if (opts && opts.redo) {
-      b = document.createElement('button');
-      b.className = 'ov-pl-redo';
-      b.textContent = '↻';
-      b.title = t('ov_pl_redo');
-      b.onclick = () => run(opts.redo.action);
-      c.appendChild(b);
-    }
+    });
     return c;
+  };
+  const buildBtn = (action, label) => ({ cls: 'ov-pl-btn', text: label, onClick: () => run(action) });
+  const skipBtn = step => ({ cls: 'ov-pl-mini', text: t('ov_pl_skip'), onClick: () => skip(step) });
+  const redoBtn = action => ({ cls: 'ov-pl-redo', text: '↻', title: t('ov_pl_redo'), onClick: () => run(action) });
+  const undoBtn = step => ({ cls: 'ov-pl-mini', text: t('ov_pl_unskip'), onClick: () => unskip(step) });
+
+  // Each step: done → "✓ … ↻" · skipped → "⊘ … undo" · pending → status + [build] [skip]
+  const stepChip = (step, done, doneStatus, pendingStatus, action, buildLabel, canBuild = true) => {
+    if (done) return chip('✓ ' + doneStatus, [redoBtn(action)]);
+    if (isSkipped(dir, step)) return chip('⊘ ' + t('ov_pl_skipped'), [undoBtn(step)]);
+    return chip(pendingStatus, canBuild ? [buildBtn(action, buildLabel), skipBtn(step)] : []);
   };
 
   // Transcript
-  if (hasAccurate) {
-    bar.appendChild(chip('✓ ' + t('ov_pl_transcript_accurate'), { redo: { action: 'ai-transcribe' } }));
-  } else {
-    const status = hasLines ? t('ov_pl_transcript_draft') : t('ov_pl_transcript_empty');
-    bar.appendChild(chip(status, hasWebm ? { build: { action: 'ai-transcribe', label: t('ov_pl_improve') } } : null));
-  }
+  bar.appendChild(stepChip('transcript', hasAccurate,
+    t('ov_pl_transcript_accurate'),
+    hasLines ? t('ov_pl_transcript_draft') : t('ov_pl_transcript_empty'),
+    'ai-transcribe', t('ov_pl_improve'), hasWebm));
 
-  // Screens — only shown when the recording actually has screenshots (optional step)
-  if (unanalyzed > 0) {
-    bar.appendChild(chip(t('ov_pl_screens_todo').replace('{n}', unanalyzed), { build: { action: 'analyze-screens', label: t('ov_pl_screens_btn') } }));
-  } else if (analyzed > 0) {
-    bar.appendChild(chip('✓ ' + t('ov_pl_screens_done'), { redo: { action: 'analyze-screens' } }));
+  // Screens — only when the recording actually has screenshots (optional step)
+  if (unanalyzed > 0 || analyzed > 0) {
+    bar.appendChild(stepChip('screens', unanalyzed === 0 && analyzed > 0,
+      t('ov_pl_screens_done'),
+      t('ov_pl_screens_todo').replace('{n}', unanalyzed),
+      'analyze-screens', t('ov_pl_screens_btn'), true));
   }
 
   // Summary
-  bar.appendChild(hasSummary
-    ? chip('✓ ' + t('ov_pl_summary_done'), { redo: { action: 'summarize' } })
-    : chip(t('ov_pl_summary_none'), { build: { action: 'summarize', label: t('ov_pl_summary_btn') } }));
+  bar.appendChild(stepChip('summary', hasSummary,
+    t('ov_pl_summary_done'), t('ov_pl_summary_none'),
+    'summarize', t('ov_pl_summary_btn'), true));
 
   return bar;
 }
@@ -6218,8 +6248,14 @@ async function openFileOverlay(fileName, dirHandle = S.dirHandle, baseTxtName = 
       const baseText = await readSessionFile(baseTxtName, dirHandle, true);
       if (baseText) mergedText = mergeScreenshotLines(text, baseText);
     }
-    // ── Pipeline guide: show where this session stands + the next steps ──
-    body.appendChild(await buildPipelineBar(mergedText, fileName, dirHandle, baseTxtName, ov));
+    // ── Pipeline guide: state + next steps (build / skip / redo) ──
+    const plHolder = document.createElement('div');
+    const refreshPipeline = async () => {
+      plHolder.innerHTML = '';
+      plHolder.appendChild(await buildPipelineBar(mergedText, fileName, dirHandle, baseTxtName, refreshPipeline));
+    };
+    await refreshPipeline();
+    body.appendChild(plHolder);
 
     const txDiv = renderTranscriptTxt(mergedText, dirHandle);
     // Mark screenshot cards that came from base file (not editable in AI file save)
@@ -6568,6 +6604,7 @@ async function deleteSessionFiles(dirName) {
 async function handleSessionAction(action, name, anchorEl, aiFile, dirHandle = S.dirHandle) {
   if (action === 'more') { showSessMenu(name, anchorEl, aiFile, dirHandle); return; }
   if (action === 'info') { await showSessionInfo(name, dirHandle); return; }
+  if (action === 'skip-transcript') { setSkip(name.replace(/\.txt$/, ''), 'transcript', true); renderSessions(($('sessions-search')?.value || '').trim(), false); return; }
   if (action === 'view') {
     await openFileOverlay(aiFile || name, dirHandle, aiFile ? name : null);
     return;
