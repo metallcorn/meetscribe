@@ -725,6 +725,13 @@
       background: var(--accent); color: #fff; border: none; white-space: nowrap; cursor: pointer;
     }
     .ov-pl-btn:hover { filter: brightness(1.08); }
+    .ov-pl-redo {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 24px; height: 24px; padding: 0; border-radius: 50%; font-size: 14px; line-height: 1;
+      background: none; border: 1px solid var(--border); color: var(--dim); cursor: pointer;
+      transition: color 0.12s, border-color 0.12s, transform 0.2s;
+    }
+    .ov-pl-redo:hover { color: var(--accent2); border-color: var(--accent2); transform: rotate(-90deg); }
     .ov-meta { color: var(--dim); font-size: 11px; margin-bottom: 12px; }
 
     /* ── Find bar ─────────────────────────────────────── */
@@ -4835,10 +4842,13 @@ async function loadSessions() {
 }
 
 // The single recommended "next step" for a session, from cheap signals.
-// Precise pipeline state (screens analyzed? summarized?) lives in the detail view.
+// Only nudge when we KNOW something is pending (audio with no accurate
+// transcript). Otherwise no CTA — the row is a clean note you open; launching
+// or re-running individual steps lives in the detail view, which reads the file
+// and knows exactly what's done.
 function sessNextStep({ hasWebm, aiFile }) {
   if (hasWebm && !aiFile) return { action: 'ai-transcribe', label: t('sess_cta_process') };
-  return { action: 'summarize', label: t('sess_cta_summary') };
+  return null;
 }
 
 // A session is "processing" if any background op is registered for it
@@ -4920,7 +4930,7 @@ function renderSessions(query = '', animate = true) {
         <span class="sess-meta">${timeStr} · ${ext}${audioLabel}${aiLabel}</span>
       </div>
       <div class="sess-actions">
-        <button class="sess-cta" data-action="${cta.action}">${cta.label}</button>
+        ${cta ? `<button class="sess-cta" data-action="${cta.action}">${cta.label}</button>` : ''}
         <span class="sess-proc"><span class="sess-proc-dot"></span>${t('sess_processing')}</span>
         <button class="sess-more-btn ghost" data-action="more" title="⋯">⋯</button>
       </div>`;
@@ -6143,34 +6153,50 @@ async function buildPipelineBar(mergedText, fileName, dirHandle, baseTxtName) {
   const analyzed = (mergedText.match(/\[SCREEN:/g) || []).length;
   const hasSummary = /^\s*#/.test(mergedText);
 
-  const chip = (statusHtml, btn) => {
+  // opts: { build:{action,label} } → primary "launch" button (step not done);
+  //       { redo:{action} }        → done: "✓ …" + a ↻ redo button next to it.
+  const chip = (statusHtml, opts) => {
     const c = document.createElement('div');
     c.className = 'ov-pl-chip';
     c.innerHTML = `<span class="ov-pl-status">${statusHtml}</span>`;
-    if (btn) {
-      const b = document.createElement('button');
+    const run = action => handleSessionAction(action, baseName, b, aiFileName, dirHandle);
+    let b;
+    if (opts && opts.build) {
+      b = document.createElement('button');
       b.className = 'ov-pl-btn';
-      b.textContent = btn.label;
-      b.onclick = () => handleSessionAction(btn.action, baseName, b, aiFileName, dirHandle);
+      b.textContent = opts.build.label;
+      b.onclick = () => run(opts.build.action);
+      c.appendChild(b);
+    } else if (opts && opts.redo) {
+      b = document.createElement('button');
+      b.className = 'ov-pl-redo';
+      b.textContent = '↻';
+      b.title = t('ov_pl_redo');
+      b.onclick = () => run(opts.redo.action);
       c.appendChild(b);
     }
     return c;
   };
 
-  const trStatus = hasAccurate ? '✓ ' + t('ov_pl_transcript_accurate')
-    : hasLines ? t('ov_pl_transcript_draft')
-    : t('ov_pl_transcript_empty');
-  bar.appendChild(chip(trStatus, (!hasAccurate && hasWebm) ? { action: 'ai-transcribe', label: t('ov_pl_improve') } : null));
-
-  if (unanalyzed > 0) {
-    bar.appendChild(chip(t('ov_pl_screens_todo').replace('{n}', unanalyzed), { action: 'analyze-screens', label: t('ov_pl_screens_btn') }));
-  } else if (analyzed > 0) {
-    bar.appendChild(chip('✓ ' + t('ov_pl_screens_done'), null));
+  // Transcript
+  if (hasAccurate) {
+    bar.appendChild(chip('✓ ' + t('ov_pl_transcript_accurate'), { redo: { action: 'ai-transcribe' } }));
+  } else {
+    const status = hasLines ? t('ov_pl_transcript_draft') : t('ov_pl_transcript_empty');
+    bar.appendChild(chip(status, hasWebm ? { build: { action: 'ai-transcribe', label: t('ov_pl_improve') } } : null));
   }
 
+  // Screens — only shown when the recording actually has screenshots (optional step)
+  if (unanalyzed > 0) {
+    bar.appendChild(chip(t('ov_pl_screens_todo').replace('{n}', unanalyzed), { build: { action: 'analyze-screens', label: t('ov_pl_screens_btn') } }));
+  } else if (analyzed > 0) {
+    bar.appendChild(chip('✓ ' + t('ov_pl_screens_done'), { redo: { action: 'analyze-screens' } }));
+  }
+
+  // Summary
   bar.appendChild(hasSummary
-    ? chip('✓ ' + t('ov_pl_summary_done'), null)
-    : chip(t('ov_pl_summary_none'), { action: 'summarize', label: t('ov_pl_summary_btn') }));
+    ? chip('✓ ' + t('ov_pl_summary_done'), { redo: { action: 'summarize' } })
+    : chip(t('ov_pl_summary_none'), { build: { action: 'summarize', label: t('ov_pl_summary_btn') } }));
 
   return bar;
 }
