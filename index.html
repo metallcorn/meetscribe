@@ -969,6 +969,12 @@
     }
     .drawer-row:last-child { margin-bottom: 0; }
     .drawer-label { font-size: 12px; color: var(--dim); min-width: 72px; flex-shrink: 0; }
+    /* Prevent a horizontal scrollbar: flex inputs must be allowed to shrink,
+       and selects must fill the row instead of sizing to their longest option */
+    .drawer-body { overflow-x: hidden; }
+    .drawer-row { min-width: 0; }
+    .drawer-row input, .drawer-row select { min-width: 0; max-width: 100%; }
+    .drawer-row select { flex: 1; }
 
     .drawer-folder-name {
       font-size: 12px; color: var(--text); font-weight: 500;
@@ -7536,6 +7542,7 @@ function applyOnboardingTranslations() {
   $('ob-g2').textContent = t('ob_g2');
   $('ob-g3').innerHTML = t('ob_g3');
   $('ob-warn').innerHTML = t('ob_warn');
+  $('ob-extras').innerHTML = t('ob_extras');
   $('ob-btn-back').textContent = t('ob_btn_back');
   $('ob-close').title = t('ob_close_title');
   _obRenderNavText();
@@ -7765,6 +7772,7 @@ document.addEventListener('visibilitychange', () => {
           </div>
         </div>
         <div class="ob-warn-box" id="ob-warn"></div>
+        <div class="ob-note" id="ob-extras"></div>
       </div>
 
     </div>
