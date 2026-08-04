@@ -1597,6 +1597,13 @@
         </select>
       </div>
       <div class="drawer-hint" id="offline-transcribe-hint">Нажмите 🎙 у любой сессии — появится пикер с доступными движками.</div>
+      <div class="drawer-row" style="margin-top:8px">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;flex:1">
+          <input type="checkbox" id="autoprocess-toggle" style="accent-color:var(--accent);flex-shrink:0">
+          <span class="drawer-label" id="autoprocess-label" style="margin:0">Авто-обработка после записи</span>
+        </label>
+      </div>
+      <div class="drawer-hint" id="autoprocess-warn" style="color:var(--danger)"></div>
     </div>
 
     <div class="drawer-section" id="bg-section" style="display:none">
@@ -1849,6 +1856,8 @@ function applyTranslations() {
     $('groq-offline-key-input').placeholder = t('settings_groq_key_placeholder');
     $('gemini-offline-key-input').placeholder = t('settings_gemini_key_placeholder');
     $('offline-transcribe-hint').innerHTML = t('settings_deepgram_hint');
+    $('autoprocess-label').textContent = t('settings_autoprocess_label');
+    $('autoprocess-warn').innerHTML = t('settings_autoprocess_warn');
     $('offline-lang-label').textContent = t('settings_offline_lang_label');
     $('offline-lang').options[0].textContent = t('settings_offline_lang_auto');
   }
@@ -2091,8 +2100,8 @@ async function dbLoad() {
 // fall back to a full scan. Handles are NOT stored (resolved lazily on click).
 async function cacheSaveIndex(folder, sessions) {
   const db = await openDB();
-  const lite = sessions.map(({ name, dirName, lastModified, aiFile, hasWebm }) =>
-    ({ name, dirName, lastModified, aiFile, hasWebm }));
+  const lite = sessions.map(({ name, dirName, lastModified, aiFile, hasWebm, hasScreens }) =>
+    ({ name, dirName, lastModified, aiFile, hasWebm, hasScreens }));
   return new Promise((res, rej) => {
     const tx = db.transaction('cache', 'readwrite');
     tx.objectStore('cache').put({ folder, sessions: lite }, 'sessionIndex');
@@ -4439,7 +4448,7 @@ async function stopRecording(forRestart = false) {
   // the next real scan; falls back to a scan if the index isn't built yet.
   const newRec = {
     name: savedDirName + '.txt', dirName: savedDirName, dirHandle: S.recDirHandle,
-    lastModified: Date.now(), aiFile: null, hasWebm: !!S.audioFileName,
+    lastModified: Date.now(), aiFile: null, hasWebm: !!S.audioFileName, hasScreens: S.screenCount > 0,
   };
   if (Array.isArray(S.sessionFiles)) {
     updateSessionIndex(list => { if (!list.some(f => f.dirName === newRec.dirName)) list.unshift(newRec); });
@@ -4451,6 +4460,8 @@ async function stopRecording(forRestart = false) {
     showMeetingNameToast(savedDirName);
     // Show welcome back if transcript box is empty after this session
     if (!$('t-lines').children.length) $('welcome')?.classList.remove('hidden');
+    // Opt-in auto-pipeline: transcribe → screens → summary, no clicks
+    if (localStorage.getItem('meetscribe_autoprocess') === '1') autoProcess(savedDirName + '.txt', S.recDirHandle);
   }
 
   return { savedFile, savedTranscript };
@@ -4909,6 +4920,7 @@ async function loadSessions() {
       name: entryName + '.txt', dirName: entryName, dirHandle: h,
       lastModified: new Date(+m[1], +m[2]-1, +m[3], +m[4], +m[5]).getTime(),
       aiFile: prev ? prev.aiFile : null, hasWebm: prev ? prev.hasWebm : false,
+      hasScreens: prev ? prev.hasScreens : false,
     };
     byDir.set(entryName, rec);
     return rec;
@@ -4926,8 +4938,12 @@ async function loadSessions() {
   const invalid = [];
   await mapLimit(dirs, 32, async ([entryName, h]) => {
     const sf = new Set();
+    let hasScreens = false;
     try {
-      for await (const [fname, fh] of h.entries()) { if (fh.kind === 'file') sf.add(fname); }
+      for await (const [fname, fh] of h.entries()) {
+        if (fh.kind === 'file') sf.add(fname);
+        else if (fh.kind === 'directory' && fname === 'screenshots') hasScreens = true;
+      }
     } catch { return; }
     const rec = byDir.get(entryName);
     if (!rec) return;
@@ -4936,6 +4952,7 @@ async function loadSessions() {
       : sf.has(entryName + '_groq.txt') ? entryName + '_groq.txt'
       : sf.has(entryName + '_ai.txt') ? entryName + '_ai.txt' : null;
     rec.hasWebm = sf.has(entryName + '.webm');
+    rec.hasScreens = hasScreens;
   });
 
   if (invalid.length) {
@@ -5009,7 +5026,7 @@ function renderSessions(query = '', animate = true) {
   let lastDay = null;
   const frag = document.createDocumentFragment();
 
-  files.forEach(({ name, dirName, dirHandle, lastModified, aiFile, hasWebm }, idx) => {
+  files.forEach(({ name, dirName, dirHandle, lastModified, aiFile, hasWebm, hasScreens }, idx) => {
     const d = new Date(lastModified);
     const dayStr = d.toLocaleDateString(_lang === 'ru' ? 'ru-RU' : 'en-US', { day: 'numeric', month: 'long', year: 'numeric' });
     const dayLabel = dayStr === todayStr ? t('sessions_today') : dayStr === yesterdayStr ? t('sessions_yesterday') : dayStr;
@@ -5041,8 +5058,9 @@ function renderSessions(query = '', animate = true) {
     const audioLabel = hasWebm ? ' · WEBM' : '';
 
     // Action carousel: flip through pipeline actions with ‹ ›, click the label to run.
-    // Default to the recommended step (transcribe when audio has no accurate transcript).
-    const cycI = (hasWebm && !aiFile) ? 0 : 2;
+    // Recommended default: Transcript if audio isn't transcribed yet → else Screens
+    // if the recording has screenshots (optional but worth surfacing) → else Summary.
+    const cycI = (hasWebm && !aiFile) ? 0 : (hasScreens ? 1 : 2);
     const act = SESS_CYCLE[cycI];
 
     item.innerHTML = `
@@ -6702,6 +6720,76 @@ async function deleteSessionFiles(dirName) {
   await S.dirHandle.removeEntry(dirName, { recursive: true });
 }
 
+// Core summarization — write a report into targetFile using promptText + model.
+// Extracted so both the ✨ picker flow and the auto-pipeline can call it.
+async function summarizeInto(targetFile, dirHandle, promptText, model) {
+  const text = await readSessionFile(targetFile, dirHandle);
+  if (text === null) return false;
+  const modelLabel = model.provider === 'gemini' ? `Gemini / ${model.model}` : `${model.provider} / ${model.model}`;
+  const finalPrompt = promptText.includes('{{transcript}}')
+    ? promptText.replace('{{transcript}}', text)
+    : promptText + '\n\n' + text;
+  const spinToast = makeToast(`
+    <div class="toast-title"><span class="spinner"></span> ${t('summary_summarizing').replace('{file}', escHtml(targetFile))}</div>
+    <div style="font-size:12px;color:var(--dim)">${t('summary_generating').replace('{model}', escHtml(modelLabel))}</div>
+  `);
+  try {
+    const d = await callWithModelOption(model, { contents: [{ parts: [{ text: finalPrompt }] }] });
+    const minutes = stripCodeFence(d.candidates?.[0]?.content?.parts?.[0]?.text ?? '');
+    if (!minutes) throw new Error(t('error_summary_empty'));
+    const now = new Date();
+    const header =
+      t('summary_report_header') +
+      `${t('summary_generated_label')}${now.toLocaleDateString(_lang === 'ru' ? 'ru-RU' : 'en-US')} ${now.toLocaleTimeString(_lang === 'ru' ? 'ru-RU' : 'en-US',{hour:'2-digit',minute:'2-digit'})}\n` +
+      `${t('summary_model_label')}${modelLabel}\n\n` +
+      `---\n\n${minutes}\n\n---\n\n`;
+    const baseLines = text.split('\n');
+    const meetIdx = baseLines.findIndex(l => l.startsWith('MeetScribe'));
+    const tsIdx = baseLines.findIndex(l => /^\[\d+:\d+:\d+\]/.test(l));
+    const cutIdx = meetIdx >= 0 ? meetIdx : (tsIdx >= 0 ? tsIdx : 0);
+    const transcriptPart = baseLines.slice(cutIdx).join('\n');
+    const fh = await dirHandle.getFileHandle(targetFile, { create: false });
+    const w = await fh.createWritable();
+    await w.write(header + transcriptPart);
+    await w.close();
+    removeToast(spinToast);
+    autoToast(`<div class="toast-title">${t('toast_summarized')}</div><div style="font-size:12px;color:var(--dim)">${escHtml(targetFile)}</div>`, 4000);
+    return true;
+  } catch(e) {
+    console.error('summarize file error', e);
+    removeToast(spinToast);
+    showError(t('error_summarize') + e.message);
+    return false;
+  }
+}
+
+// Auto-pipeline (opt-in): after a recording stops, run transcript → screens →
+// summary with sensible defaults, no pickers. Costs money — gated by a setting.
+async function autoProcess(name, dirHandle) {
+  try {
+    const dg = localStorage.getItem('meetscribe_deepgram_key');
+    const gq = localStorage.getItem('meetscribe_groq_key');
+    const gm = localStorage.getItem('meetscribe_rest_key_gemini');
+
+    // 1. Transcribe with the best available offline engine
+    let aiFile = null;
+    if (dg)      { await transcribeAudioWithDeepgram(name, dirHandle); aiFile = name.replace(/\.txt$/, '_dg.txt'); }
+    else if (gq) { await transcribeAudioWithGroq(name, dirHandle);     aiFile = name.replace(/\.txt$/, '_groq.txt'); }
+    else if (gm) { await transcribeAudioWithAI(name, dirHandle);       aiFile = name.replace(/\.txt$/, '_ai.txt'); }
+
+    const models = await getModelOptions();
+    if (!models.length) return;
+
+    // 2. Recognize screenshots (no-op if there are none)
+    await analyzeScreenshots(name, dirHandle, models[0]);
+
+    // 3. Summarize the best transcript with the first prompt + last-used model
+    const prompts = await loadPrompts();
+    const model = getLastSummaryModel(models) || models[0];
+    await summarizeInto(aiFile || name, dirHandle, prompts[0].text, model);
+  } catch(e) { console.error('autoProcess', e); }
+}
+
 async function handleSessionAction(action, name, anchorEl, aiFile, dirHandle = S.dirHandle) {
   if (action === 'more') { showSessMenu(name, anchorEl, aiFile, dirHandle); return; }
   if (action === 'info') { await showSessionInfo(name, dirHandle); return; }
@@ -6745,55 +6833,12 @@ async function handleSessionAction(action, name, anchorEl, aiFile, dirHandle = S
   }
   if (action === 'summarize') {
     const targetFile = aiFile || name;  // file we summarize AND write back into
-    const text = await readSessionFile(targetFile, dirHandle);
-    if (text === null) return;
-
     const [prompts, modelOptions] = await Promise.all([loadPrompts(), getModelOptions()]);
     if (!modelOptions.length) { showError(t('error_no_rest_keys'), 0); return; }
 
     const result = await pickSummarizeOptions(prompts, modelOptions, anchorEl);
     if (!result) return;
-    const { promptText, model: selectedModel } = result;
-
-    const modelLabel = selectedModel.provider === 'gemini'
-      ? `Gemini / ${selectedModel.model}`
-      : `${selectedModel.provider} / ${selectedModel.model}`;
-    const finalPrompt = promptText.includes('{{transcript}}')
-      ? promptText.replace('{{transcript}}', text)
-      : promptText + '\n\n' + text;
-
-    const spinToast = makeToast(`
-      <div class="toast-title"><span class="spinner"></span> ${t('summary_summarizing').replace('{file}', escHtml(targetFile))}</div>
-      <div style="font-size:12px;color:var(--dim)">${t('summary_generating').replace('{model}', escHtml(modelLabel))}</div>
-    `);
-    try {
-      const d = await callWithModelOption(selectedModel, { contents: [{ parts: [{ text: finalPrompt }] }] });
-      const minutes = stripCodeFence(d.candidates?.[0]?.content?.parts?.[0]?.text ?? '');
-      if (!minutes) throw new Error(t('error_summary_empty'));
-      const now = new Date();
-      const header =
-        t('summary_report_header') +
-        `${t('summary_generated_label')}${now.toLocaleDateString(_lang === 'ru' ? 'ru-RU' : 'en-US')} ${now.toLocaleTimeString(_lang === 'ru' ? 'ru-RU' : 'en-US',{hour:'2-digit',minute:'2-digit'})}\n` +
-        `${t('summary_model_label')}${modelLabel}\n\n` +
-        `---\n\n${minutes}\n\n---\n\n`;
-      // Strip existing markdown preamble so re-summarizing doesn't stack duplicate headers.
-      // Keep "MeetScribe Transcript" block intact; fall back to first [HH:MM:SS] line.
-      const baseLines = text.split('\n');
-      const meetIdx = baseLines.findIndex(l => l.startsWith('MeetScribe'));
-      const tsIdx = baseLines.findIndex(l => /^\[\d+:\d+:\d+\]/.test(l));
-      const cutIdx = meetIdx >= 0 ? meetIdx : (tsIdx >= 0 ? tsIdx : 0);
-      const transcriptPart = baseLines.slice(cutIdx).join('\n');
-      const fh = await dirHandle.getFileHandle(targetFile, { create: false });
-      const w = await fh.createWritable();
-      await w.write(header + transcriptPart);
-      await w.close();
-      removeToast(spinToast);
-      autoToast(`<div class="toast-title">${t('toast_summarized')}</div><div style="font-size:12px;color:var(--dim)">${escHtml(targetFile)}</div>`, 4000);
-    } catch(e) {
-      console.error('summarize file error', e);
-      removeToast(spinToast);
-      showError(t('error_summarize') + e.message);
-    }
+    await summarizeInto(targetFile, dirHandle, result.promptText, result.model);
   }
   if (action === 'rename') {
     const toast = showRenameToast(name, '', aiFile, dirHandle);
@@ -7070,6 +7115,10 @@ function bindEvents() {
   $('audio-source').addEventListener('change', e => {
     localStorage.setItem('meetscribe_audio_source', e.target.value);
     updateAudioSrcHint();
+  });
+  $('autoprocess-toggle').checked = localStorage.getItem('meetscribe_autoprocess') === '1';
+  $('autoprocess-toggle').addEventListener('change', e => {
+    localStorage.setItem('meetscribe_autoprocess', e.target.checked ? '1' : '0');
   });
 
   $('btn-lang').addEventListener('click', () => {
