@@ -67,6 +67,12 @@
       margin-right: 2px;
     }
     .header-gap { flex: 1; }
+    .logo-ic { width: 16px; height: 16px; color: var(--accent); flex-shrink: 0; }
+    .logo { display: inline-flex; align-items: center; gap: 5px; }
+    /* Monochrome inline-SVG icons for controls — one consistent set */
+    .icon-btn { display: inline-flex; align-items: center; gap: 6px; }
+    .ic { width: 15px; height: 15px; flex-shrink: 0; display: block; }
+    .settings-btn .ic, #btn-screenshot .ic { width: 17px; height: 17px; }
 
     /* ── INPUTS (default, used in toasts) ── */
     input[type="text"] {
@@ -1513,6 +1519,13 @@
     </div>
 
     <div class="drawer-section">
+      <div class="drawer-section-title glossary-title">Глоссарий</div>
+      <div class="drawer-hint glossary-hint" style="margin-bottom:8px">Термины помогают ASR точнее распознать специфичные слова</div>
+      <textarea id="glossary-input"
+        placeholder="Термины, имена, продукты — по одному на строку или через запятую.&#10;Пример: Kubernetes, Redis Cluster, Q1 OKR, CI/CD"></textarea>
+    </div>
+
+    <div class="drawer-section" id="summary-section">
       <div class="drawer-section-title">Summary API</div>
       <div class="drawer-row">
         <span class="drawer-label">Провайдер</span>
@@ -1608,7 +1621,7 @@
 
     <!-- Top bar: logo + controls + settings -->
     <div class="top-bar">
-      <div class="logo">🎙 MeetScribe</div>
+      <div class="logo"><svg class="logo-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="5.8" y="1.8" width="4.4" height="8" rx="2.2"/><path d="M3.6 7.2a4.4 4.4 0 0 0 8.8 0"/><path d="M8 11.8V14"/></svg>MeetScribe</div>
 
       <!-- Recording controls (display:contents when visible — flows into flex row) -->
       <div id="controls" class="hidden">
@@ -1616,17 +1629,16 @@
           <div class="rec-dot"></div>
           <span id="rec-timer">00:00:00</span>
         </div>
-        <button class="primary" id="btn-start" title="Начать запись  [Alt+R]">▶ Начать запись</button>
-        <button id="btn-stop" disabled title="Завершить запись  [Alt+S]">⏹ Завершить</button>
-        <button id="btn-restart" disabled title="Завершить и начать новую  [Alt+N]">⏭ Завершить и новую</button>
-        <button id="btn-mic-mute" disabled class="ghost hidden" title="Заглушить микрофон  [Alt+M]"><canvas id="mic-wave-btn"></canvas><span>🎙 Выкл мик</span></button>
-        <button id="btn-screenshot" disabled class="ghost hidden" title="Скриншот  [Alt+P]">📷</button>
-        <button id="btn-glossary" class="ghost" style="font-size:12px">📖 Глоссарий</button>
+        <button class="primary icon-btn" id="btn-start" title="Начать запись  [Alt+R]"><svg class="ic" viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="8" r="5"/></svg><span class="lbl">Начать запись</span></button>
+        <button id="btn-stop" class="icon-btn hidden" disabled title="Завершить запись  [Alt+S]"><svg class="ic" viewBox="0 0 16 16" fill="currentColor"><rect x="3.5" y="3.5" width="9" height="9" rx="2.2"/></svg><span class="lbl">Завершить</span></button>
+        <button id="btn-restart" class="icon-btn hidden" disabled title="Завершить и начать новую  [Alt+N]"><svg class="ic" viewBox="0 0 16 16" fill="currentColor"><path d="M3.5 3.2v9.6L10 8 3.5 3.2z"/><rect x="10.8" y="3" width="1.9" height="10" rx="0.9"/></svg><span class="lbl">Завершить и новую</span></button>
+        <button id="btn-mic-mute" disabled class="ghost icon-btn hidden" title="Заглушить микрофон  [Alt+M]"><canvas id="mic-wave-btn"></canvas><svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="5.8" y="1.8" width="4.4" height="8" rx="2.2"/><path d="M3.6 7.2a4.4 4.4 0 0 0 8.8 0"/><path d="M8 11.8V14"/></svg><span>Выкл мик</span></button>
+        <button id="btn-screenshot" disabled class="ghost icon-btn hidden" title="Скриншот  [Alt+P]"><svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2.2 5.6c0-.8.6-1.4 1.4-1.4h1.2l.9-1.4h4.6l.9 1.4h1.2c.8 0 1.4.6 1.4 1.4v6c0 .8-.6 1.4-1.4 1.4H3.6c-.8 0-1.4-.6-1.4-1.4v-6z"/><circle cx="8" cy="8.6" r="2.4"/></svg></button>
       </div>
 
       <div class="header-gap"></div>
       <button id="btn-lang" class="ghost" style="font-size:12px;padding:4px 8px;font-weight:600" title="Language / Язык">EN</button>
-      <button id="btn-settings" class="ghost settings-btn" title="Настройки">⚙</button>
+      <button id="btn-settings" class="ghost icon-btn settings-btn" title="Настройки"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.1 5.1l2.1 2.1M16.8 16.8l2.1 2.1M18.9 5.1L16.8 7.2M7.2 16.8l-2.1 2.1"/></svg></button>
     </div>
 
     <!-- Browser warning -->
@@ -1650,15 +1662,6 @@
     </div>
 
     <!-- Glossary panel -->
-    <div id="glossary-panel">
-      <div class="glossary-header">
-        <span class="glossary-title">Глоссарий</span>
-        <span class="glossary-hint">Термины помогают ASR точнее распознать специфичные слова</span>
-      </div>
-      <textarea id="glossary-input"
-        placeholder="Термины, имена, продукты — по одному на строку или через запятую.&#10;Пример: Kubernetes, Redis Cluster, Q1 OKR, CI/CD"></textarea>
-    </div>
-
     <!-- Error banner -->
     <div id="error-banner" class="hidden"></div>
 
@@ -1755,8 +1758,8 @@
     <div class="panel-hdr">
       <span>Сессии</span>
       <div style="display:flex;gap:4px">
-        <button id="btn-search" class="ghost" style="font-size:13px;padding:2px 7px" title="Поиск (Alt+F)">🔍</button>
-        <button id="btn-refresh" class="ghost" style="font-size:13px;padding:2px 7px" title="Обновить">↻</button>
+        <button id="btn-search" class="ghost icon-btn" style="padding:3px 7px" title="Поиск (Alt+F)"><svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="7" cy="7" r="4.2"/><path d="M10.2 10.2 14 14"/></svg></button>
+        <button id="btn-refresh" class="ghost icon-btn" style="padding:3px 7px" title="Обновить"><svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5V5.2H10.8"/></svg></button>
       </div>
     </div>
     <div class="panel-search" id="panel-search">
@@ -1809,7 +1812,7 @@ function applyTranslations() {
   document.querySelector('#echo-controls .drawer-label').title = t('settings_echo_threshold_title');
   set('headphones-label', 'settings_headphones');
   // Summary API section
-  const sumSection = document.querySelector('#settings-drawer .drawer-section:nth-child(3)');
+  const sumSection = document.getElementById('summary-section');
   if (sumSection) {
     sumSection.querySelector('.drawer-section-title').textContent = t('settings_summary_section');
     const prov = sumSection.querySelector('.drawer-label');
@@ -1840,15 +1843,14 @@ function applyTranslations() {
   document.querySelector('#settings-drawer .drawer-section:last-child .drawer-hint').innerHTML = t('settings_backup_hint');
 
   // Top bar
-  set('btn-start', 'btn_start');
+  document.querySelector('#btn-start .lbl').textContent = t('btn_start');
   document.getElementById('btn-start').title = t('btn_start_title');
-  set('btn-stop', 'btn_stop');
+  document.querySelector('#btn-stop .lbl').textContent = t('btn_stop');
   document.getElementById('btn-stop').title = t('btn_stop_title');
-  set('btn-restart', 'btn_restart');
+  document.querySelector('#btn-restart .lbl').textContent = t('btn_restart');
   document.getElementById('btn-restart').title = t('btn_restart_title');
   document.getElementById('btn-mic-mute').querySelector('span').textContent = t('btn_mic_mute_off');
   document.getElementById('btn-mic-mute').title = t('btn_mic_mute_title');
-  set('btn-glossary', 'btn_glossary');
   document.getElementById('btn-settings').title = t('btn_settings_title');
 
   // Browser warning
@@ -4250,8 +4252,11 @@ async function startRecording() {
   showRecordingIdle();
 
   $('btn-start').disabled   = true;
+  $('btn-start').classList.add('hidden');
   $('btn-stop').disabled    = false;
   $('btn-restart').disabled = false;
+  $('btn-stop').classList.remove('hidden');
+  $('btn-restart').classList.remove('hidden');
   if (S.micStream) {
     const btn = $('btn-mic-mute');
     btn.classList.remove('hidden', 'muted');
@@ -4333,6 +4338,9 @@ async function stopRecording(forRestart = false) {
 
   $('btn-stop').disabled    = true;
   $('btn-restart').disabled = true;
+  $('btn-stop').classList.add('hidden');
+  $('btn-restart').classList.add('hidden');
+  $('btn-start').classList.remove('hidden');
   const micBtn = $('btn-mic-mute');
   micBtn.disabled = true; micBtn.classList.add('hidden'); micBtn.classList.remove('muted');
   $('btn-screenshot').disabled = true; $('btn-screenshot').classList.add('hidden');
@@ -6801,9 +6809,6 @@ function initScrollBehavior() {
 }
 
 function bindEvents() {
-  $('btn-glossary').addEventListener('click', () => {
-    $('glossary-panel').classList.toggle('open');
-  });
   let _glossaryTimer;
   $('glossary-input').addEventListener('input', e => {
     clearTimeout(_glossaryTimer);
