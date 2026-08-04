@@ -565,26 +565,53 @@
       to   { opacity: 1; transform: translateX(0); }
     }
     .sess-item {
-      display: flex; align-items: center; gap: 6px;
-      padding: 6px 10px; border-bottom: 1px solid var(--border);
-      cursor: pointer; transition: background 0.1s;
+      position: relative; overflow: hidden;
+      display: flex; align-items: center; gap: 8px;
+      padding: 9px 12px; border-bottom: 1px solid var(--border);
+      cursor: pointer; transition: background 0.12s;
       animation: sessIn 0.18s ease both;
     }
     .sess-item:hover { background: var(--bg3); }
     #sessions-list.no-anim .sess-item { animation: none; }
     .sess-name {
-      font-size: 12.5px; overflow: hidden; text-overflow: ellipsis;
-      white-space: nowrap; font-weight: 500; flex: 1; min-width: 0;
-      cursor: pointer; padding: 3px 4px; border-radius: 5px;
+      flex: 1; min-width: 0; cursor: pointer;
+    }
+    .sess-name .sess-title {
+      display: block; font-size: 13px; font-weight: 500; color: var(--text);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
       transition: color 0.12s;
     }
-    .sess-name:hover { color: var(--accent2); }
-    .sess-name .sess-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .sess-name .sess-meta { font-size: 10px; color: var(--dim); font-weight: 400; margin-top: 1px; display: block; }
-    .sess-actions { display: flex; gap: 3px; flex-shrink: 0; align-items: center; }
-    .sess-actions button { padding: 2px 6px; font-size: 11px; border-radius: 6px; }
-    .sess-more-btn { padding: 2px 7px !important; font-size: 15px !important; line-height: 1; color: var(--dim) !important; }
+    .sess-name:hover .sess-title { color: var(--accent2); }
+    .sess-name .sess-meta {
+      display: block; font-size: 10.5px; color: var(--dim); font-weight: 400; margin-top: 2px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    /* Right side: one quiet "next step" CTA + a ⋯ that appears on hover */
+    .sess-actions { display: flex; gap: 4px; flex-shrink: 0; align-items: center; position: relative; z-index: 1; }
+    .sess-cta {
+      font-size: 11.5px; font-weight: 500; padding: 4px 11px; border-radius: 999px;
+      background: transparent; color: var(--accent2); border: 1px solid transparent;
+      white-space: nowrap; transition: background 0.12s, border-color 0.12s, color 0.12s;
+    }
+    .sess-item:hover .sess-cta { border-color: var(--border); background: var(--bg2); }
+    .sess-cta:hover { background: var(--accent) !important; color: #fff !important; border-color: transparent !important; }
+    .sess-more-btn { padding: 2px 7px !important; font-size: 16px !important; line-height: 1; color: var(--dim) !important; opacity: 0; transition: opacity 0.12s; }
+    .sess-item:hover .sess-more-btn, .sess-more-btn:focus-visible { opacity: 1; }
     .sess-more-btn:hover { color: var(--text) !important; }
+    /* "Being built" state — soft sweeping shimmer + a pulsing status pill */
+    .sess-item.processing { cursor: default; }
+    .sess-item.processing::before {
+      content: ''; position: absolute; inset: 0; pointer-events: none;
+      background: linear-gradient(100deg, transparent 25%, rgba(127,127,127,0.12) 50%, transparent 75%);
+      background-size: 220% 100%; animation: sessBuild 1.5s linear infinite;
+    }
+    @keyframes sessBuild { from { background-position: 200% 0; } to { background-position: -120% 0; } }
+    .sess-proc { display: none; align-items: center; gap: 6px; font-size: 11px; font-weight: 500; color: var(--accent2); white-space: nowrap; }
+    .sess-item.processing .sess-cta { display: none; }
+    .sess-item.processing .sess-more-btn { opacity: 1; }
+    .sess-item.processing .sess-proc { display: inline-flex; }
+    .sess-proc-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: procPulse 1s ease-in-out infinite; }
+    @keyframes procPulse { 0%,100% { opacity: 0.35; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1.15); } }
     /* Skeleton placeholder rows shown while loadSessions() scans the folder */
     .sess-skeleton {
       display: flex; flex-direction: column; gap: 6px;
@@ -4788,6 +4815,26 @@ async function loadSessions() {
   console.log(`[loadSessions] enrich=${(performance.now() - t2).toFixed(0)}ms total=${(performance.now() - t0).toFixed(0)}ms`);
 }
 
+// The single recommended "next step" for a session, from cheap signals.
+// Precise pipeline state (screens analyzed? summarized?) lives in the detail view.
+function sessNextStep({ hasWebm, aiFile }) {
+  if (hasWebm && !aiFile) return { action: 'ai-transcribe', label: t('sess_cta_process') };
+  return { action: 'summarize', label: t('sess_cta_summary') };
+}
+
+// A session is "processing" if any background op is registered for it
+function isSessionProcessing(dirName) {
+  const suffix = ':' + dirName + '.txt';
+  for (const k of _runningOps) if (k.endsWith(suffix)) return true;
+  return false;
+}
+
+function refreshProcessingStates() {
+  document.querySelectorAll('#sessions-list .sess-item[data-dir]').forEach(item => {
+    item.classList.toggle('processing', isSessionProcessing(item.dataset.dir));
+  });
+}
+
 function renderSessions(query = '', animate = true) {
   const list = $('sessions-list');
   list.innerHTML = '';
@@ -4831,6 +4878,8 @@ function renderSessions(query = '', animate = true) {
     const item = document.createElement('div');
     item.className = 'sess-item';
     item.dataset.idx = idx;
+    item.dataset.dir = dirName;
+    if (isSessionProcessing(dirName)) item.classList.add('processing');
 
     // Format display name: strip date prefix for title, show as clean name
     const nameNoExt = name.replace(/\.[^.]+$/, '');
@@ -4843,16 +4892,17 @@ function renderSessions(query = '', animate = true) {
     const aiLabel = aiFile ? (aiFile.endsWith('_dg.txt') ? ' · DG' : aiFile.endsWith('_groq.txt') ? ' · Groq' : ' · AI') : '';
     const audioLabel = hasWebm ? ' · WEBM' : '';
 
+    // One recommended "next step" (coarse — precise pipeline lives in the detail view)
+    const cta = sessNextStep({ hasWebm, aiFile });
+
     item.innerHTML = `
       <div class="sess-name" title="${escHtml(aiFile || name)}">
         <span class="sess-title">${displayTitle}</span>
         <span class="sess-meta">${timeStr} · ${ext}${audioLabel}${aiLabel}</span>
       </div>
       <div class="sess-actions">
-        ${name.endsWith('.txt') ? `<button data-action="summarize" title="${t('sessions_btn_summarize_title')}">✨</button>` : ''}
-        ${name.endsWith('.txt') ? `<button data-action="chat" title="${t('sessions_btn_chat_title')}">💬</button>` : ''}
-        ${name.endsWith('.txt') ? `<button data-action="ai-transcribe" title="${t('sessions_btn_ai_transcribe_title')}">🎙</button>` : ''}
-        ${name.endsWith('.txt') ? `<button data-action="analyze-screens" title="${t('sessions_btn_analyze_screens_title')}">🖼</button>` : ''}
+        <button class="sess-cta" data-action="${cta.action}">${cta.label}</button>
+        <span class="sess-proc"><span class="sess-proc-dot"></span>${t('sess_processing')}</span>
         <button class="sess-more-btn ghost" data-action="more" title="⋯">⋯</button>
       </div>`;
     // Clicks are handled by a single delegated listener on #sessions-list (see init)
@@ -5953,6 +6003,12 @@ async function transcribeAudioWithAI(txtName, dirHandle = S.dirHandle) {
 }
 
 const _runningOps = new Set(); // "transcribe:name.txt" | "screens:name.txt"
+// Hook add/delete once so every op start/stop updates the session cards'
+// "processing" state — no need to touch the ~12 individual call sites.
+['add', 'delete'].forEach(m => {
+  const orig = _runningOps[m].bind(_runningOps);
+  _runningOps[m] = (...a) => { const r = orig(...a); try { refreshProcessingStates(); } catch(e){} return r; };
+});
 
 let _activeSessMenu = null;
 function showSessMenu(name, anchorEl, aiFile, dirHandle) {
@@ -5960,6 +6016,11 @@ function showSessMenu(name, anchorEl, aiFile, dirHandle) {
   const menu = document.createElement('div');
   menu.className = 'sess-menu';
   menu.innerHTML = `
+    <button data-a="summarize">${t('sessions_menu_summarize')}</button>
+    <button data-a="chat">${t('sessions_menu_chat')}</button>
+    <button data-a="ai-transcribe">${t('sessions_menu_transcribe')}</button>
+    <button data-a="analyze-screens">${t('sessions_menu_screens')}</button>
+    <div class="menu-sep"></div>
     <button data-a="dl">${t('sessions_menu_download')}</button>
     <button data-a="rename">${t('sessions_menu_rename')}</button>
     <button data-a="info">${t('sessions_menu_info')}</button>
@@ -5971,7 +6032,7 @@ function showSessMenu(name, anchorEl, aiFile, dirHandle) {
 
   // Position near anchor
   const r = anchorEl.getBoundingClientRect();
-  const mw = 180, mh = aiFile ? 195 : 165;
+  const mw = 210, mh = aiFile ? 360 : 328;
   let top = r.bottom + 4, left = r.right - mw;
   if (top + mh > window.innerHeight) top = r.top - mh - 4;
   if (left < 6) left = 6;
