@@ -6725,10 +6725,19 @@ async function deleteSessionFiles(dirName) {
 async function summarizeInto(targetFile, dirHandle, promptText, model) {
   const text = await readSessionFile(targetFile, dirHandle);
   if (text === null) return false;
+  // Feed recognized screenshot descriptions to the LLM: they live in the base
+  // .txt, so when summarizing an accurate transcript (_dg/_ai/_groq) merge them
+  // in for the prompt only (don't persist them into the AI file).
+  let contextText = text;
+  const baseName = targetFile.replace(/_(dg|groq|ai)\.txt$/, '.txt');
+  if (baseName !== targetFile) {
+    const baseText = await readSessionFile(baseName, dirHandle, true);
+    if (baseText) contextText = mergeScreenshotLines(text, baseText);
+  }
   const modelLabel = model.provider === 'gemini' ? `Gemini / ${model.model}` : `${model.provider} / ${model.model}`;
   const finalPrompt = promptText.includes('{{transcript}}')
-    ? promptText.replace('{{transcript}}', text)
-    : promptText + '\n\n' + text;
+    ? promptText.replace('{{transcript}}', contextText)
+    : promptText + '\n\n' + contextText;
   const spinToast = makeToast(`
     <div class="toast-title"><span class="spinner"></span> ${t('summary_summarizing').replace('{file}', escHtml(targetFile))}</div>
     <div style="font-size:12px;color:var(--dim)">${t('summary_generating').replace('{model}', escHtml(modelLabel))}</div>
