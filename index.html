@@ -1501,7 +1501,7 @@
     </div>
 
     <div class="drawer-section" id="bg-section" style="display:none">
-      <div class="drawer-section-title">Фон</div>
+      <div class="drawer-section-title" id="settings-bg-title">Фон</div>
       <div class="drawer-row">
         <button id="btn-bg-prev" class="ghost" style="padding:5px 11px;font-size:14px">◀</button>
         <span id="bg-label" style="flex:1;text-align:center;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dim)">Выкл</span>
@@ -1512,14 +1512,14 @@
     </div>
 
     <div class="drawer-section">
-      <div class="drawer-section-title">Тема</div>
+      <div class="drawer-section-title" id="settings-theme-title">Тема</div>
       <div class="drawer-row">
         <button id="btn-theme" class="ghost" style="flex:1;justify-content:center">🖥 Авто</button>
       </div>
     </div>
 
     <div class="drawer-section">
-      <div class="drawer-section-title">Резервная копия</div>
+      <div class="drawer-section-title" id="settings-backup-title">Резервная копия</div>
       <div class="drawer-row">
         <button id="btn-backup" class="ghost" style="flex:1">📦 Создать бэкап</button>
       </div>
@@ -1763,10 +1763,13 @@ function applyTranslations() {
     $('offline-lang-label').textContent = t('settings_offline_lang_label');
     $('offline-lang').options[0].textContent = t('settings_offline_lang_auto');
   }
+  document.getElementById('settings-bg-title').textContent = t('settings_bg_section');
   set('bg-label', 'settings_bg_off');
   document.getElementById('btn-bg-off').title = t('settings_bg_off_title');
   document.querySelector('#bg-section .drawer-hint').innerHTML = t('settings_bg_hint');
   // theme & backup — updated dynamically
+  document.getElementById('settings-theme-title').textContent = t('settings_theme_section');
+  document.getElementById('settings-backup-title').textContent = t('settings_backup_section');
   document.getElementById('btn-backup').textContent = t('settings_backup_create');
   document.getElementById('btn-restore-backup').textContent = t('settings_backup_restore');
   document.querySelector('#settings-drawer .drawer-section:last-child .drawer-hint').innerHTML = t('settings_backup_hint');
