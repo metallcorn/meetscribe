@@ -1576,7 +1576,7 @@
         <span class="glossary-hint">Термины помогают ASR точнее распознать специфичные слова</span>
       </div>
       <textarea id="glossary-input"
-        placeholder="Термины, имена, продукты — по одному на строку или через запятую.&#10;Пример: Kubernetes, Тимур Иванов, Q1 OKR, Redis Cluster"></textarea>
+        placeholder="Термины, имена, продукты — по одному на строку или через запятую.&#10;Пример: Kubernetes, Redis Cluster, Q1 OKR, CI/CD"></textarea>
     </div>
 
     <!-- Error banner -->
@@ -1787,6 +1787,10 @@ function applyTranslations() {
   document.querySelector('.glossary-title').textContent = t('glossary_title');
   document.querySelector('.glossary-hint').textContent = t('glossary_hint');
   document.getElementById('glossary-input').placeholder = t('glossary_placeholder');
+
+  // REST key input (settings header)
+  const restKeyInput = document.getElementById('rest-key-input');
+  if (restKeyInput) restKeyInput.placeholder = t('api_key_placeholder');
 
   // Welcome card
   document.querySelector('.welcome-title').textContent = t('welcome_title');
@@ -7459,7 +7463,7 @@ function _obUpdateEngineKeyRow(engine) {
     deepgram: t('settings_deepgram_live_key_placeholder'),
     groq: t('settings_groq_key_placeholder'),
   };
-  $('ob-engine-key').placeholder = placeholders[engine] || 'API key...';
+  $('ob-engine-key').placeholder = placeholders[engine] || t('api_key_placeholder');
   const lsKey = engine === 'gemini' ? 'meetscribe_gemini_key' :
                 engine === 'deepgram' ? 'meetscribe_deepgram_live_key' :
                 engine === 'groq' ? 'meetscribe_groq_key' : null;
@@ -7502,6 +7506,7 @@ function applyOnboardingTranslations() {
   $('ob-ai-f2').textContent = t('ob_ai_f2');
   $('ob-ai-f3').textContent = t('ob_ai_f3');
   $('ob-ai-provider-label').textContent = t('ob_ai_provider');
+  $('ob-rest-key').placeholder = t('api_key_placeholder');
   $('ob-save-rest-key').textContent = t('settings_save_btn');
   $('ob-rest-key-saved').textContent = t('ob_key_saved');
   $('ob-title-5').textContent = t('ob_title_5');

@@ -70,7 +70,8 @@ const LANG = {
     // ── Glossary ─────────────────────────────────────────────────────────
     glossary_title: 'Glossary',
     glossary_hint: 'Terms help ASR recognize specific words more accurately',
-    glossary_placeholder: 'Terms, names, products — one per line or comma-separated.\nExample: Kubernetes, John Smith, Q1 OKR, Redis Cluster',
+    glossary_placeholder: 'Terms, names, products — one per line or comma-separated.\nExample: Kubernetes, Redis Cluster, Q1 OKR, CI/CD',
+    api_key_placeholder: 'API key',
 
     // ── Welcome card ─────────────────────────────────────────────────────
     welcome_title: 'Ready to record',
@@ -434,7 +435,8 @@ const LANG = {
     // ── Glossary ─────────────────────────────────────────────────────────
     glossary_title: 'Глоссарий',
     glossary_hint: 'Термины помогают ASR точнее распознать специфичные слова',
-    glossary_placeholder: 'Термины, имена, продукты — по одному на строку или через запятую.\nПример: Kubernetes, Тимур Иванов, Q1 OKR, Redis Cluster',
+    glossary_placeholder: 'Термины, имена, продукты — по одному на строку или через запятую.\nПример: Kubernetes, Redis Cluster, Q1 OKR, CI/CD',
+    api_key_placeholder: 'API ключ',
 
     // ── Welcome card ─────────────────────────────────────────────────────
     welcome_title: 'Готов к записи',
