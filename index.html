@@ -4187,7 +4187,7 @@ async function analyzeScreenshots(name, dirHandle, modelOpt) {
   cancelRow.style.cssText = 'margin-top:6px';
   const cancelBtn = document.createElement('button');
   cancelBtn.textContent = t('screens_cancel');
-  cancelBtn.onclick = () => { cancelled = true; removeToast(toast); };
+  cancelBtn.onclick = () => { cancelled = true; _runningOps.delete(opKey); removeToast(toast); };
   cancelRow.appendChild(cancelBtn);
   toast.appendChild(cancelRow);
 
@@ -5614,7 +5614,7 @@ async function transcribeAudioWithGroq(txtName, dirHandle = S.dirHandle) {
   cancelRow.style.cssText = 'margin-top:6px';
   const cancelBtn = document.createElement('button');
   cancelBtn.textContent = t('groq_cancel');
-  cancelBtn.onclick = () => { cancelled = true; removeToast(toast); };
+  cancelBtn.onclick = () => { cancelled = true; _runningOps.delete(opKey); removeToast(toast); };
   cancelRow.appendChild(cancelBtn);
   toast.appendChild(cancelRow);
 
@@ -5738,7 +5738,7 @@ async function transcribeAudioWithDeepgram(txtName, dirHandle = S.dirHandle) {
   cancelRow.style.cssText = 'margin-top:6px';
   const cancelBtn = document.createElement('button');
   cancelBtn.textContent = t('dg_cancel');
-  cancelBtn.onclick = () => { cancelled = true; abortCtrl.abort(); removeToast(toast); };
+  cancelBtn.onclick = () => { cancelled = true; abortCtrl.abort(); _runningOps.delete(opKey); removeToast(toast); };
   cancelRow.appendChild(cancelBtn);
   toast.appendChild(cancelRow);
 
@@ -5930,7 +5930,7 @@ async function transcribeAudioWithAI(txtName, dirHandle = S.dirHandle) {
   cancelRow.style.cssText = 'margin-top:6px';
   const cancelBtn = document.createElement('button');
   cancelBtn.textContent = t('ai_cancel');
-  cancelBtn.onclick = () => { cancelled = true; abortCtrl.abort(); removeToast(toast); };
+  cancelBtn.onclick = () => { cancelled = true; abortCtrl.abort(); _runningOps.delete(opKey); removeToast(toast); };
   cancelRow.appendChild(cancelBtn);
   toast.appendChild(cancelRow);
 
