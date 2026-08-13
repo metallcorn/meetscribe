@@ -1495,6 +1495,7 @@
         <select id="live-engine">
           <option value="gemini">Gemini Live API</option>
           <option value="deepgram">Deepgram Live</option>
+          <option value="palabra">Palabra</option>
           <option value="groq">Groq Whisper</option>
           <option value="webspeech">Web Speech API (только мик)</option>
           <option value="none">Без транскрипции</option>
@@ -1507,6 +1508,10 @@
       <div class="drawer-row" id="live-engine-deepgram-row">
         <input type="password" id="deepgram-live-key-input" placeholder="Deepgram API ключ для Live" autocomplete="off" style="flex:1">
         <button id="btn-save-deepgram-live-key" class="primary" style="font-size:12px;padding:4px 10px;flex-shrink:0">Сохранить</button>
+      </div>
+      <div class="drawer-row" id="live-engine-palabra-row">
+        <input type="password" id="palabra-key-input" placeholder="Palabra API key" autocomplete="off" style="flex:1">
+        <button id="btn-save-palabra-key" class="primary" style="font-size:12px;padding:4px 10px;flex-shrink:0">Сохранить</button>
       </div>
       <div class="drawer-row" id="live-engine-groq-row">
         <input type="password" id="groq-key-input" placeholder="Groq API ключ" autocomplete="off" style="flex:1">
@@ -1832,8 +1837,9 @@ function applyTranslations() {
   document.querySelector('#live-engine option[value="none"]').textContent = t('settings_none_option');
   document.getElementById('api-key-input').placeholder = t('settings_gemini_key_placeholder');
   document.getElementById('deepgram-live-key-input').placeholder = t('settings_deepgram_live_key_placeholder');
+  document.getElementById('palabra-key-input').placeholder = t('settings_palabra_key_placeholder');
   document.getElementById('groq-key-input').placeholder = t('settings_groq_key_placeholder');
-  document.querySelectorAll('#btn-save-key, #btn-save-deepgram-live-key, #btn-save-groq-key, #btn-save-rest-key, #btn-save-deepgram-key, #btn-save-groq-offline-key, #btn-save-gemini-offline-key').forEach(b => {
+  document.querySelectorAll('#btn-save-key, #btn-save-deepgram-live-key, #btn-save-palabra-key, #btn-save-groq-key, #btn-save-rest-key, #btn-save-deepgram-key, #btn-save-groq-offline-key, #btn-save-gemini-offline-key').forEach(b => {
     if (!b._origSet) b.textContent = t('settings_save_btn');
   });
   document.querySelector('#echo-controls .drawer-label').textContent = t('settings_echo_threshold');
@@ -2019,10 +2025,12 @@ const S = {
   reconnectAttempts: 0,
   reconnectTimer: null,
   sessionEnded: false,
-  sttMode: 'gemini',  // 'gemini' | 'deepgram' | 'groq' | 'webspeech'
+  sttMode: 'gemini',  // 'gemini' | 'deepgram' | 'palabra' | 'groq' | 'webspeech'
   dgWs: null,
   dgReady: false,
   dgKeyValidated: false,
+  plWs: null,         // Palabra realtime STT WebSocket
+  plReady: false,
   speechRecog: null,
   // file
   fileHandle: null,
@@ -2254,6 +2262,9 @@ function loadApiKey() {
   const dgLiveKey = localStorage.getItem('meetscribe_deepgram_live_key') || '';
   if (dgLiveKey) $('deepgram-live-key-input').value = dgLiveKey;
   else if (dgKey) $('deepgram-live-key-input').value = dgKey; // prefill from post key
+
+  const palabraKey = localStorage.getItem('meetscribe_palabra_key') || '';
+  if (palabraKey) $('palabra-key-input').value = palabraKey;
   const groqKey = localStorage.getItem('meetscribe_groq_key') || '';
   if (groqKey) { $('groq-key-input').value = groqKey; $('groq-offline-key-input').value = groqKey; }
   const geminiOfflineKey = localStorage.getItem('meetscribe_rest_key_gemini') || '';
@@ -2269,10 +2280,12 @@ function loadApiKey() {
 function updateLiveEngineUI(engine) {
   $('live-engine-gemini-row').style.display = engine === 'gemini' ? '' : 'none';
   $('live-engine-deepgram-row').style.display = engine === 'deepgram' ? '' : 'none';
+  $('live-engine-palabra-row').style.display = engine === 'palabra' ? '' : 'none';
   $('live-engine-groq-row').style.display = engine === 'groq' ? '' : 'none';
   const hints = {
     gemini: t('engine_hint_gemini'),
     deepgram: t('engine_hint_deepgram'),
+    palabra: t('engine_hint_palabra'),
     groq: t('engine_hint_groq'),
     webspeech: t('engine_hint_webspeech'),
     none: t('engine_hint_none'),
@@ -2346,6 +2359,17 @@ function saveDeepgramLiveKey() {
   else localStorage.removeItem('meetscribe_deepgram_live_key');
   S.dgKeyValidated = false;
   const btn = $('btn-save-deepgram-live-key');
+  const orig = btn.textContent;
+  btn.textContent = v ? '✅' : '🗑';
+  btn.disabled = true;
+  setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2000);
+}
+
+function savePalabraKey() {
+  const v = $('palabra-key-input').value.trim();
+  if (v) localStorage.setItem('meetscribe_palabra_key', v);
+  else localStorage.removeItem('meetscribe_palabra_key');
+  const btn = $('btn-save-palabra-key');
   const orig = btn.textContent;
   btn.textContent = v ? '✅' : '🗑';
   btn.disabled = true;
@@ -3354,6 +3378,71 @@ function sendChunkDG(buf) {
   S.dgWs.send(buf); // raw binary — no base64
 }
 
+// ─── Palabra realtime STT ──────────────────────────────────────────────────
+// wss stream, api_key in the query, raw PCM16/16k binary frames (same audio the
+// worklet already produces). Messages: { message_type:"transcription", is_eos,
+// segment:{ text }, delta }. is_eos=true → finalized segment. Speaker labels use
+// our energy heuristic (same as Deepgram Live — realtime has no API diarization).
+function connectPalabra() {
+  if (S.sessionEnded) return;
+  const key = localStorage.getItem('meetscribe_palabra_key');
+  if (!key) { showError(t('error_palabra_key_needed'), 0); return; }
+  const url = `wss://stream.palabra.ai/asr/v1/speech-to-text/stream?api_key=${encodeURIComponent(key)}&format=pcm_s16le&sample_rate=16000`;
+  try { S.plWs = new WebSocket(url); S.plWs.binaryType = 'arraybuffer'; }
+  catch(e) { showError(t('error_palabra_ws') + e.message, 0); return; }
+  S.plReady = false;
+
+  S.plWs.onopen = () => { S.plReady = true; S.reconnectAttempts = 0; hideReconnectingBubble(); };
+
+  const snapshotSpeaker = () => {
+    if (!S.micStream) return 'Speaker';
+    const total = S.tabTurnEnergy + S.micTurnEnergy;
+    const threshold = parseFloat($('echo-threshold').value);
+    return (total > 0 && S.micTurnEnergy / total >= threshold && S.micPeakEnergy >= 0.015) ? 'You' : 'Speaker';
+  };
+
+  S.plWs.onmessage = ({ data }) => {
+    let msg; try { msg = JSON.parse(data); } catch { return; }
+    if (msg.message_type !== 'transcription') return;
+    const text = (msg.segment?.text || '').trim();
+    if (!text) return;
+    if (msg.is_eos) {
+      const speaker = snapshotSpeaker();
+      S.tabTurnEnergy = 0; S.micTurnEnergy = 0; S.micPeakEnergy = 0;
+      const ts = S.startTs ? fmt(Date.now() - S.startTs) : '00:00:00';
+      const line = `[${ts}] ${speaker}: ${text}`;
+      commitLine(line);
+      appendFile(line + '\n');
+      setLive(''); S.liveBuf = '';
+    } else {
+      handleSTTInterim(text, true);
+    }
+  };
+
+  S.plWs.onerror = e => console.error('[Palabra] error', e);
+  S.plWs.onclose = ({ code, reason }) => {
+    S.plReady = false;
+    console.warn('[Palabra] closed, code:', code, 'reason:', reason);
+    if (S.sessionEnded) return;
+    if (code === 1008 || code === 4000 || code === 4001 || code === 3000) {
+      showError(t('error_palabra_auth').replace('{code}', code), 0);
+      return;
+    }
+    if (S.reconnectAttempts < 3) {
+      const delay = Math.pow(2, S.reconnectAttempts) * 1000;
+      S.reconnectAttempts++;
+      S.reconnectTimer = setTimeout(() => { if (!S.sessionEnded) connectPalabra(); }, delay);
+    } else {
+      showError(t('error_palabra_auth').replace('{code}', code), 0);
+    }
+  };
+}
+
+function sendChunkPalabra(buf) {
+  if (!S.plWs || S.plWs.readyState !== WebSocket.OPEN || !S.plReady) return;
+  S.plWs.send(buf); // raw binary PCM16
+}
+
 // ─── Web Speech adapter ────────────────────────────────────────────────────
 function connectWebSpeech() {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -3732,6 +3821,7 @@ async function startAudio() {
     if (!S.recording) return;
     if (S.sttMode === 'gemini') sendChunk(e.data);
     else if (S.sttMode === 'deepgram') sendChunkDG(e.data);
+    else if (S.sttMode === 'palabra') sendChunkPalabra(e.data);
     else if (S.sttMode === 'groq') sendChunkGroq(e.data);
     // webspeech handles its own audio capture — no chunk routing needed
   };
@@ -4333,6 +4423,8 @@ async function startRecording() {
     $('recording-idle-label').style.display = '';
   } else if (S.sttMode === 'deepgram') {
     connectDG();
+  } else if (S.sttMode === 'palabra') {
+    connectPalabra();
   } else if (S.sttMode === 'groq') {
     startGroq();
   } else if (S.sttMode === 'webspeech') {
@@ -4419,6 +4511,8 @@ async function stopRecording(forRestart = false) {
   S.ws = null;
   if (S.dgWs && S.dgWs.readyState === WebSocket.OPEN) { try { S.dgWs.close(); } catch {} }
   S.dgWs = null; S.dgReady = false;
+  if (S.plWs && S.plWs.readyState === WebSocket.OPEN) { try { S.plWs.close(); } catch {} }
+  S.plWs = null; S.plReady = false;
   if (S.sttMode === 'groq') stopGroq();
   if (S.speechRecog) { try { S.speechRecog.stop(); } catch {} S.speechRecog = null; }
   stopAudio();
@@ -4640,6 +4734,7 @@ const BACKUP_LS_KEYS = [
   'meetscribe_rest_url',
   'meetscribe_deepgram_key',
   'meetscribe_deepgram_live_key',
+  'meetscribe_palabra_key',
   'meetscribe_groq_key',
   'meetscribe_last_summary_model',
   'meetscribe_live_engine',
@@ -7001,6 +7096,8 @@ function bindEvents() {
   $('deepgram-key-input').addEventListener('keydown', e => { if (e.key === 'Enter') saveDeepgramKey(); });
   $('btn-save-deepgram-live-key').addEventListener('click', saveDeepgramLiveKey);
   $('deepgram-live-key-input').addEventListener('keydown', e => { if (e.key === 'Enter') saveDeepgramLiveKey(); });
+  $('btn-save-palabra-key').addEventListener('click', savePalabraKey);
+  $('palabra-key-input').addEventListener('keydown', e => { if (e.key === 'Enter') savePalabraKey(); });
   $('btn-save-groq-key').addEventListener('click', saveGroqKey);
   $('groq-key-input').addEventListener('keydown', e => { if (e.key === 'Enter') saveGroqKey(); });
   $('btn-save-groq-offline-key').addEventListener('click', saveGroqOfflineKey);
