@@ -2031,6 +2031,7 @@ const S = {
   dgKeyValidated: false,
   plWs: null,         // Palabra realtime STT WebSocket
   plReady: false,
+  plReconnects: 0,    // consecutive reconnect attempts (reset on successful open)
   speechRecog: null,
   // file
   fileHandle: null,
@@ -3392,7 +3393,7 @@ function connectPalabra() {
   catch(e) { showError(t('error_palabra_ws') + e.message, 0); return; }
   S.plReady = false;
 
-  S.plWs.onopen = () => { S.plReady = true; S.reconnectAttempts = 0; hideReconnectingBubble(); };
+  S.plWs.onopen = () => { S.plReady = true; S.plReconnects = 0; hideReconnectingBubble(); console.log('[Palabra] connected'); };
 
   const snapshotSpeaker = () => {
     if (!S.micStream) return 'Speaker';
@@ -3424,17 +3425,19 @@ function connectPalabra() {
     S.plReady = false;
     console.warn('[Palabra] closed, code:', code, 'reason:', reason);
     if (S.sessionEnded) return;
+    // Real auth/config errors — don't hammer the server
     if (code === 1008 || code === 4000 || code === 4001 || code === 3000) {
       showError(t('error_palabra_auth').replace('{code}', code), 0);
       return;
     }
-    if (S.reconnectAttempts < 3) {
-      const delay = Math.pow(2, S.reconnectAttempts) * 1000;
-      S.reconnectAttempts++;
-      S.reconnectTimer = setTimeout(() => { if (!S.sessionEnded) connectPalabra(); }, delay);
-    } else {
-      showError(t('error_palabra_auth').replace('{code}', code), 0);
-    }
+    // Palabra caps each stream (~15 min → code 1005). Reconnect seamlessly and
+    // keep doing so for the whole meeting — a new stream picks the audio back up.
+    // Persistent while recording, with capped backoff (no hard give-up).
+    showReconnectingBubble();
+    const n = S.plReconnects || 0;
+    const delay = Math.min(Math.pow(2, n) * 1000, 8000);
+    S.plReconnects = n + 1;
+    S.reconnectTimer = setTimeout(() => { if (!S.sessionEnded) connectPalabra(); }, delay);
   };
 }
 
