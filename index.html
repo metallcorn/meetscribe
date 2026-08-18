@@ -3054,7 +3054,7 @@ async function toHtml(txt, fileName, dirHandle = null, baseTxtName = null) {
 <title>${escHtml(fileName || 'Transcript')}</title>
 <style>
   body {
-    background: ${v('--bg')}; color: ${v('--text')};
+    background: ${v('--bg2')}; color: ${v('--text')};
     font-family: system-ui, -apple-system, sans-serif;
     font-size: 14px; line-height: 1.5;
     max-width: 860px; margin: 40px auto; padding: 0 24px;
@@ -3069,8 +3069,9 @@ async function toHtml(txt, fileName, dirHandle = null, baseTxtName = null) {
   .ov-bubble .b-body { flex: 1; min-width: 0; }
   .ov-bubble .b-speaker { font-size: 10px; font-weight: 600; margin-bottom: 2px; }
   .ov-bubble .b-text {
-    background: ${v('--bg3')}; border-radius: 0 10px 10px 10px;
-    padding: 6px 10px; font-size: 13px; word-break: break-word;
+    background: ${v('--bg3')}; border: 1px solid ${v('--border')}; border-radius: 0 10px 10px 10px;
+    padding: 7px 11px; font-size: 13px; line-height: 1.5; word-break: break-word;
+    display: inline-block; max-width: 100%;
   }
   .ov-bubble .b-ts { font-size: 10px; color: ${v('--dim')}; margin-top: 3px; }
   .ov-screenshot {
