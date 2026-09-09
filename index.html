@@ -1791,10 +1791,12 @@
     <div class="panel-hdr">
       <span>Сессии</span>
       <div style="display:flex;gap:4px">
+        <button id="btn-import" class="ghost icon-btn" style="padding:3px 7px" title="Импорт записи"><svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 10.5V2.5M4.8 5.7 8 2.5l3.2 3.2"/><path d="M2.5 10v2.5a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1V10"/></svg></button>
         <button id="btn-search" class="ghost icon-btn" style="padding:3px 7px" title="Поиск (Alt+F)"><svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="7" cy="7" r="4.2"/><path d="M10.2 10.2 14 14"/></svg></button>
         <button id="btn-refresh" class="ghost icon-btn" style="padding:3px 7px" title="Обновить"><svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5V5.2H10.8"/></svg></button>
       </div>
     </div>
+    <input type="file" id="import-file-input" accept="audio/*,video/*,.mkv,.mov,.m4a,.flac,.opus" style="display:none">
     <div class="panel-search" id="panel-search">
       <input type="text" id="sessions-search" placeholder="Поиск по названию..." autocomplete="off">
     </div>
@@ -1955,6 +1957,7 @@ function applyTranslations() {
   document.querySelector('.panel-hdr span').textContent = t('sessions_title');
   document.getElementById('btn-search').title = t('sessions_search_title');
   document.getElementById('btn-refresh').title = t('sessions_refresh_title');
+  document.getElementById('btn-import').title = t('import_title');
   document.getElementById('sessions-search').placeholder = t('sessions_search_placeholder');
 
   // Error banner close button — rendered dynamically, handled in showError()
@@ -4927,6 +4930,133 @@ function updateBgControls() {
 // ─────────────────────────────────────────────
 // SESSIONS LIST
 // ─────────────────────────────────────────────
+// A session's audio is usually <dir>.webm (a recording), but imported sessions
+// keep their original format. These helpers make audio lookup format-agnostic.
+const AUDIO_EXTS = ['webm','mp3','m4a','mp4','wav','ogg','oga','opus','aac','flac','mkv','mov','avi'];
+function mimeForAudio(fname) {
+  const ext = (fname.split('.').pop() || '').toLowerCase();
+  return ({
+    webm:'audio/webm', mp3:'audio/mpeg', m4a:'audio/mp4', mp4:'video/mp4', wav:'audio/wav',
+    ogg:'audio/ogg', oga:'audio/ogg', opus:'audio/ogg', aac:'audio/aac', flac:'audio/flac',
+    mkv:'video/x-matroska', mov:'video/quicktime', avi:'video/x-msvideo',
+  })[ext] || 'application/octet-stream';
+}
+// The actual audio filename in a session folder (webm or any imported format), or null.
+async function findSessionAudioName(dirHandle, txtName) {
+  const base = txtName.replace(/\.txt$/, '');
+  for (const ext of AUDIO_EXTS) {
+    try { await dirHandle.getFileHandle(base + '.' + ext); return base + '.' + ext; } catch {}
+  }
+  return null;
+}
+
+// ── Import an existing recording as a session ───────────────────────────────
+// Validate a media file is readable (decodable + has duration); best-effort
+// audio-track check via Chrome's webkitAudioDecodedByteCount.
+function validateMedia(file) {
+  return new Promise(resolve => {
+    const url = URL.createObjectURL(file);
+    const el = document.createElement('video');
+    el.preload = 'metadata'; el.muted = true; el.src = url;
+    let done = false;
+    const finish = r => { if (done) return; done = true; try { el.pause(); el.removeAttribute('src'); el.load(); } catch {} URL.revokeObjectURL(url); resolve(r); };
+    const to = setTimeout(() => finish({ ok: false }), 20000);
+    el.addEventListener('error', () => { clearTimeout(to); finish({ ok: false }); });
+    el.addEventListener('loadedmetadata', async () => {
+      clearTimeout(to);
+      const duration = isFinite(el.duration) ? el.duration : 0;
+      if (!duration) { finish({ ok: false }); return; }
+      let hasAudio = true;
+      try {
+        el.currentTime = Math.min(0.1, duration / 2);
+        await el.play().catch(() => {});
+        await new Promise(r => setTimeout(r, 350));
+        el.pause();
+        if (typeof el.webkitAudioDecodedByteCount === 'number') hasAudio = el.webkitAudioDecodedByteCount > 0;
+      } catch {}
+      finish({ ok: true, duration, hasAudio });
+    });
+  });
+}
+
+async function handleImportFile(file) {
+  if (!S.dirHandle) { showError(t('btn_start_no_folder')); return; }
+  const probe = makeToast(`<div class="toast-title"><span class="spinner"></span> ${t('import_checking')}</div>`);
+  const res = await validateMedia(file);
+  removeToast(probe);
+  if (!res.ok) { showError(t('import_err_unreadable')); return; }
+  showImportDialog(file, res);
+}
+
+function showImportDialog(file, meta) {
+  const now = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  const dateVal = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  const timeVal = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  const titleSlug = file.name.replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9а-яА-ЯёЁ\s\-_]/g, '').trim().slice(0, 40);
+  const mins = Math.floor(meta.duration / 60), secs = Math.floor(meta.duration % 60);
+  const sizeMB = (file.size / 1048576).toFixed(1);
+  const toast = makeToast(`
+    <div class="toast-title">${t('import_title')}</div>
+    <div style="font-size:12px;color:var(--dim);margin:4px 0 10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+      ${escHtml(file.name)} · ${sizeMB} MB · ${mins}:${pad(secs)}
+    </div>
+    ${meta.hasAudio ? '' : `<div class="drawer-hint" style="color:var(--danger);margin-bottom:8px">${t('import_no_audio')}</div>`}
+    <div style="display:flex;gap:8px;margin-bottom:8px">
+      <label style="flex:1;font-size:11px;color:var(--dim)">${t('import_date')}<input type="date" id="import-date" value="${dateVal}" style="width:100%;margin-top:3px"></label>
+      <label style="width:104px;font-size:11px;color:var(--dim)">${t('import_time')}<input type="time" id="import-time" value="${timeVal}" style="width:100%;margin-top:3px"></label>
+    </div>
+    <label style="display:block;font-size:11px;color:var(--dim);margin-bottom:12px">${t('import_name')}<input type="text" id="import-name" value="${escHtml(titleSlug)}" maxlength="40" style="width:100%;margin-top:3px"></label>
+    <div class="toast-btns">
+      <button class="primary" id="import-ok">${t('import_ok')}</button>
+      <button id="import-cancel">${t('import_cancel')}</button>
+    </div>
+  `);
+  toast.querySelector('#import-cancel').onclick = () => removeToast(toast);
+  toast.querySelector('#import-ok').onclick = async () => {
+    const d = toast.querySelector('#import-date').value;
+    const tm = toast.querySelector('#import-time').value || '00:00';
+    if (!d) { showError(t('import_err_date')); return; }
+    const nm = (toast.querySelector('#import-name').value || '').replace(/[^a-zA-Z0-9а-яА-ЯёЁ\s\-_]/g, '').replace(/\s+/g, '-').slice(0, 40);
+    removeToast(toast);
+    await doImport(file, d, tm, nm);
+  };
+}
+
+async function doImport(file, dateStr, timeStr, titleSlug) {
+  const spin = makeToast(`<div class="toast-title"><span class="spinner"></span> ${t('import_saving')}</div>`);
+  try {
+    const pad = n => String(n).padStart(2, '0');
+    const [Y, Mo, Da] = dateStr.split('-').map(Number);
+    const [H, Mi] = timeStr.split(':').map(Number);
+    const datePrefix = `${Y}-${pad(Mo)}-${pad(Da)}_${pad(H)}-${pad(Mi)}`;
+    const base = titleSlug ? `${datePrefix}_${titleSlug}` : datePrefix;
+    const exists = async name => { try { await S.dirHandle.getDirectoryHandle(name); return true; } catch { return false; } };
+    let dirName = base, n = 2;
+    while (await exists(dirName)) dirName = `${base}-${n++}`;
+
+    const dir = await S.dirHandle.getDirectoryHandle(dirName, { create: true });
+    const ext = ((file.name.split('.').pop() || 'webm').toLowerCase().replace(/[^a-z0-9]/g, '')) || 'webm';
+    let w = await (await dir.getFileHandle(dirName + '.' + ext, { create: true })).createWritable();
+    await w.write(file); await w.close();
+
+    const lang = getCurrentLang();
+    const dObj = new Date(Y, Mo - 1, Da, H, Mi);
+    const hdr = `MeetScribe Transcript\nDate: ${dObj.toLocaleDateString(lang === 'ru' ? 'ru-RU' : 'en-US')} ${dObj.toLocaleTimeString(lang === 'ru' ? 'ru-RU' : 'en-US', { hour: '2-digit', minute: '2-digit' })}\n---\n\n`;
+    w = await (await dir.getFileHandle(dirName + '.txt', { create: true })).createWritable();
+    await w.write(hdr); await w.close();
+
+    removeToast(spin);
+    const rec = { name: dirName + '.txt', dirName, dirHandle: dir, lastModified: dObj.getTime(), aiFile: null, hasWebm: true, hasScreens: false };
+    if (Array.isArray(S.sessionFiles)) updateSessionIndex(list => { if (!list.some(f => f.dirName === rec.dirName)) list.unshift(rec); });
+    else loadSessions();
+    autoToast(`<div class="toast-title">${t('import_done')}</div><div style="font-size:12px;color:var(--dim)">${escHtml(dirName)}/</div>`, 4000);
+  } catch(e) {
+    removeToast(spin);
+    showError(t('import_err_save') + e.message);
+  }
+}
+
 // Placeholder rows shown while a full folder scan is in progress
 function renderSessionsSkeleton(n = 7) {
   const list = $('sessions-list');
@@ -5050,7 +5180,7 @@ async function loadSessions() {
     rec.aiFile = sf.has(entryName + '_dg.txt') ? entryName + '_dg.txt'
       : sf.has(entryName + '_groq.txt') ? entryName + '_groq.txt'
       : sf.has(entryName + '_ai.txt') ? entryName + '_ai.txt' : null;
-    rec.hasWebm = sf.has(entryName + '.webm');
+    rec.hasWebm = AUDIO_EXTS.some(ext => sf.has(entryName + '.' + ext));  // any audio (recorded or imported)
     rec.hasScreens = hasScreens;
   });
 
@@ -5154,7 +5284,7 @@ function renderSessions(query = '', animate = true) {
       : escHtml(titlePart);
     const ext = name.match(/\.([^.]+)$/)?.[1]?.toUpperCase() || '';
     const aiLabel = aiFile ? (aiFile.endsWith('_dg.txt') ? ' · DG' : aiFile.endsWith('_groq.txt') ? ' · Groq' : ' · AI') : '';
-    const audioLabel = hasWebm ? ' · WEBM' : '';
+    const audioLabel = hasWebm ? ' · AUDIO' : '';
 
     // Action carousel: flip through pipeline actions with ‹ ›, click the label to run.
     // Recommended default: Transcript if audio isn't transcribed yet → else Screens
@@ -5702,7 +5832,7 @@ async function transcribeAudioWithGroq(txtName, dirHandle = S.dirHandle) {
   if (_runningOps.has(opKey)) { autoToast(`<div class="toast-title">${t('toast_transcribing_running')}</div><div style="font-size:12px;color:var(--dim)">${escHtml(txtName)}</div>`, 3000); return; }
   _runningOps.add(opKey);
 
-  const webmName = txtName.replace(/\.txt$/, '.webm');
+  const webmName = (await findSessionAudioName(dirHandle, txtName)) || txtName.replace(/\.txt$/, '.webm');
   const toast = makeToast(`
     <div class="toast-title" id="groq-tr-title"><span class="spinner"></span> ${t('groq_transcribing')}</div>
     <div id="groq-tr-status" style="font-size:12px;color:var(--dim);margin-top:4px">${t('dg_reading_file')}</div>
@@ -5753,7 +5883,7 @@ async function transcribeAudioWithGroq(txtName, dirHandle = S.dirHandle) {
 
     const offlineLang = localStorage.getItem('meetscribe_offline_lang') || '';
     const fd = new FormData();
-    fd.append('file', new Blob([await file.arrayBuffer()], { type: 'audio/webm' }), webmName);
+    fd.append('file', new Blob([await file.arrayBuffer()], { type: mimeForAudio(webmName) }), webmName);
     fd.append('model', 'whisper-large-v3-turbo');
     fd.append('response_format', 'verbose_json');
     fd.append('timestamp_granularities[]', 'segment');
@@ -5825,7 +5955,7 @@ async function transcribeAudioWithDeepgram(txtName, dirHandle = S.dirHandle) {
   if (_runningOps.has(opKey)) { autoToast(`<div class="toast-title">${t('toast_transcribing_running')}</div><div style="font-size:12px;color:var(--dim)">${escHtml(txtName)}</div>`, 3000); return; }
   _runningOps.add(opKey);
 
-  const webmName = txtName.replace(/\.txt$/, '.webm');
+  const webmName = (await findSessionAudioName(dirHandle, txtName)) || txtName.replace(/\.txt$/, '.webm');
   const toast = makeToast(`
     <div class="toast-title" id="dg-tr-title"><span class="spinner"></span> ${t('dg_transcribing')}</div>
     <div id="dg-tr-status" style="font-size:12px;color:var(--dim);margin-top:4px">${t('dg_reading_file')}</div>
@@ -5891,7 +6021,7 @@ async function transcribeAudioWithDeepgram(txtName, dirHandle = S.dirHandle) {
       try {
         resp = await fetch(url, {
           method: 'POST',
-          headers: { 'Authorization': `Token ${key}`, 'Content-Type': 'audio/webm' },
+          headers: { 'Authorization': `Token ${key}`, 'Content-Type': mimeForAudio(webmName) },
           body: file,
           signal: abortCtrl.signal,
         });
@@ -6015,7 +6145,7 @@ async function transcribeAudioWithAI(txtName, dirHandle = S.dirHandle) {
   if (_runningOps.has(opKey)) { autoToast(`<div class="toast-title">${t('toast_transcribing_running')}</div><div style="font-size:12px;color:var(--dim)">${escHtml(txtName)}</div>`, 3000); return; }
   _runningOps.add(opKey);
 
-  const webmName = txtName.replace(/\.txt$/, '.webm');
+  const webmName = (await findSessionAudioName(dirHandle, txtName)) || txtName.replace(/\.txt$/, '.webm');
 
   // Toast stays alive for the whole process — errors shown inside it, not dismissed
   const toast = makeToast(`
@@ -6210,7 +6340,7 @@ async function transcribeAudioWithAI(txtName, dirHandle = S.dirHandle) {
         setStatus(t('ai_uploading').replace('{size}', (file.size / 1024 / 1024).toFixed(1)));
         const uploadResp = await fetch(
           `https://generativelanguage.googleapis.com/upload/v1beta/files?uploadType=media&key=${key}`,
-          { method: 'POST', headers: { 'Content-Type': 'audio/webm', 'X-Goog-Upload-File-Name': encodeURIComponent(webmName) }, body: file, signal: abortCtrl.signal }
+          { method: 'POST', headers: { 'Content-Type': mimeForAudio(webmName), 'X-Goog-Upload-File-Name': encodeURIComponent(webmName) }, body: file, signal: abortCtrl.signal }
         );
         if (!uploadResp.ok) {
           const respText = await uploadResp.text().catch(() => '');
@@ -6387,7 +6517,7 @@ async function buildPipelineBar(mergedText, fileName, dirHandle, baseTxtName, on
   const hasAccurate = !!baseTxtName || /_(dg|ai|groq)\.txt$/.test(fileName);
 
   let hasWebm = false;
-  try { await dirHandle.getFileHandle(dirHandle.name + '.webm'); hasWebm = true; } catch {}
+  hasWebm = !!(await findSessionAudioName(dirHandle, dirHandle.name + '.txt'));
 
   const bodyText = mergedText.replace(/^[\s\S]*?\n---\n/, '');   // drop MeetScribe header
   const hasLines = /\[\d+:\d+:\d+\]/.test(bodyText);
@@ -7129,6 +7259,12 @@ function bindEvents() {
   $('btn-mic-mute').addEventListener('click', toggleMicMute);
   $('btn-screenshot').addEventListener('click', () => captureManualScreenshot());
   $('btn-refresh').addEventListener('click', loadSessions);
+  $('btn-import').addEventListener('click', () => $('import-file-input').click());
+  $('import-file-input').addEventListener('change', e => {
+    const f = e.target.files && e.target.files[0];
+    e.target.value = '';   // allow re-importing the same file
+    if (f) handleImportFile(f);
+  });
 
   // Single delegated click handler for the whole session list — resolves the
   // clicked item to its record via data-idx (avoids ~2000 per-item listeners)
