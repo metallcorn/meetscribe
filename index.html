@@ -7055,7 +7055,8 @@ async function openFileOverlay(fileName, dirHandle = S.dirHandle, baseTxtName = 
   const body = document.createElement('div');
   body.className = 'overlay-body';
   if (fileName.endsWith('.md')) {
-    body.appendChild(renderMarkdown(text));
+    // Strip the model/date metadata comment stored on report files
+    body.appendChild(renderMarkdown(text.replace(/^\s*<!--\s*meetscribe:report[\s\S]*?-->\s*/, '')));
   } else {
     // When viewing an AI file (_dg.txt/_ai.txt), screenshot markers live in base .txt — read and inject
     let mergedText = text;
@@ -7072,7 +7073,34 @@ async function openFileOverlay(fileName, dirHandle = S.dirHandle, baseTxtName = 
     await refreshPipeline();
     body.appendChild(plHolder);
 
+    // Report documents (same files the HTML export uses) — keep preview and
+    // download in sync: open them here instead of a stale inline summary.
+    const reports = [];
+    for (const kind of ['protocol', 'recap']) {
+      const rf = reportFileName(fileName, kind);
+      const rc = await readSessionFile(rf, dirHandle, true);
+      if (rc && rc.trim()) reports.push({ kind, file: rf, label: t(kind === 'protocol' ? 'export_tab_protocol' : 'export_tab_recap') });
+    }
+    if (reports.length) {
+      const links = document.createElement('div');
+      links.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;margin:0 0 14px';
+      reports.forEach(r => {
+        const b = document.createElement('button');
+        b.className = 'ghost'; b.style.cssText = 'font-size:12px;padding:5px 12px';
+        b.textContent = (r.kind === 'protocol' ? '📋 ' : '📝 ') + r.label;
+        b.onclick = () => openFileOverlay(r.file, dirHandle);
+        links.appendChild(b);
+      });
+      body.appendChild(links);
+    }
+
     const txDiv = renderTranscriptTxt(mergedText, dirHandle);
+    // When new report docs exist, drop the stale inline summary preamble so the
+    // transcript preview shows the transcript, not an out-of-date summary.
+    if (reports.length) {
+      const pre = txDiv.querySelector('.ov-md');
+      if (pre && pre === txDiv.firstElementChild) pre.remove();
+    }
     // Mark screenshot cards that came from base file (not editable in AI file save)
     if (baseTxtName && baseTxtName !== fileName) {
       txDiv.querySelectorAll('.ov-screenshot').forEach(el => { el.dataset.fromBase = '1'; });
