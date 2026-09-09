@@ -3044,83 +3044,323 @@ async function toHtml(txt, fileName, dirHandle = null, baseTxtName = null) {
     else img.style.display = 'none';
   });
   el.querySelectorAll('.ov-scr-del, .screen-del').forEach(b => b.remove());
-  // Keep toggle buttons but reset to collapsed state (JS added to HTML output will handle clicks)
+  // Screenshot toggles start collapsed; the exported <script> below re-wires clicks.
+  el.querySelectorAll('.ov-scr-body').forEach(b => b.style.display = 'none');
 
-  // Resolve current theme CSS variables
-  const cs = getComputedStyle(document.body);
-  const v = name => cs.getPropertyValue(name).trim();
+  // ── Derive document metadata ─────────────────────────────────────────────
+  const lang = getCurrentLang();
+  const locale = lang === 'ru' ? 'ru-RU' : 'en-US';
+  // Russian-aware pluralization (avoids grammar keys in the dictionary)
+  const pl = (n, ru, en) => {
+    if (lang !== 'ru') return n === 1 ? en[0] : en[1];
+    const m10 = n % 10, m100 = n % 100;
+    if (m10 === 1 && m100 !== 11) return ru[0];
+    if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return ru[1];
+    return ru[2];
+  };
+
+  // Title + date from the file/folder name: YYYY-MM-DD_HH-MM[_slug][_dg|_ai|_groq]
+  const nameNoExt = (fileName || '').replace(/\.(txt|md)$/i, '').replace(/_(dg|ai|groq)$/i, '');
+  const nameMatch = nameNoExt.match(/^(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})(?:_(.+))?$/);
+  let docTitle, dateLabel = '', timeLabel = '';
+  if (nameMatch) {
+    const [, y, mo, d, hh, mm, slug] = nameMatch;
+    const dt = new Date(+y, +mo - 1, +d, +hh, +mm);
+    dateLabel = dt.toLocaleDateString(locale, { day: 'numeric', month: 'long', year: 'numeric' });
+    timeLabel = dt.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' });
+    docTitle = slug ? slug.replace(/[-_]+/g, ' ').trim() : dateLabel;
+  } else {
+    docTitle = nameNoExt || 'Transcript';
+  }
+
+  // Duration = largest [HH:MM:SS] timestamp seen
+  let maxSec = 0;
+  for (const mm of mergedText.matchAll(/\[(\d+):(\d{2}):(\d{2})\]/g)) {
+    const sec = (+mm[1]) * 3600 + (+mm[2]) * 60 + (+mm[3]);
+    if (sec > maxSec) maxSec = sec;
+  }
+  let durationLabel = '';
+  if (maxSec > 0) {
+    const h = Math.floor(maxSec / 3600), m = Math.round((maxSec % 3600) / 60);
+    durationLabel = h > 0 ? `${h}${t('export_h')} ${m}${t('export_min')}` : `${Math.max(1, m)}${t('export_min')}`;
+  }
+
+  // Participants (in order of appearance) + screen count
+  const participants = [];
+  for (const mm of mergedText.matchAll(/^\[\d+:\d+:\d+\]\s*([^:\n]+):/gm)) {
+    const spk = mm[1].trim();
+    if (spk && !participants.includes(spk)) participants.push(spk);
+  }
+  const screenCount = (mergedText.match(/\[SCREENSHOT: /g) || []).length;
+
+  // ── Build tab content: Minutes (protocol) · Recap · Transcript ───────────
+  // Renders a markdown string and wraps wide tables so they scroll on mobile.
+  const mdToHtml = (mdText) => {
+    const d = renderMarkdown(mdText);
+    d.querySelectorAll('table.ov-table').forEach(tb => {
+      const wrap = document.createElement('div'); wrap.className = 'ov-table-wrap';
+      tb.parentNode.insertBefore(wrap, tb); wrap.appendChild(tb);
+    });
+    return d.outerHTML;
+  };
+
+  let protocolHtml = '', recapHtml = '', transcriptHtml = '';
+  if (fileName.endsWith('.md')) {
+    // A standalone markdown file exports as a single document (no transcript)
+    protocolHtml = mdToHtml(mergedText);
+  } else {
+    // Peel off any legacy summary preamble baked into the transcript file
+    const kids = Array.from(el.children);
+    let bodyKids = kids, preambleHtml = '';
+    if (kids[0] && kids[0].classList.contains('ov-md')) {
+      const md = kids[0];
+      md.style.marginBottom = ''; md.style.paddingBottom = ''; md.style.borderBottom = '';
+      md.querySelectorAll('table.ov-table').forEach(tb => {
+        const wrap = document.createElement('div'); wrap.className = 'ov-table-wrap';
+        tb.parentNode.insertBefore(wrap, tb); wrap.appendChild(tb);
+      });
+      preambleHtml = md.outerHTML;
+      bodyKids = kids.slice(1);
+    }
+    // Group consecutive rows from the same speaker (hide the repeated name/time)
+    let prevSpk = null;
+    for (const k of bodyKids) {
+      if (k.classList && k.classList.contains('ov-bubble')) {
+        const spk = k.dataset.speaker || '';
+        if (spk && spk === prevSpk) k.classList.add('cont');
+        prevSpk = spk;
+      } else prevSpk = null;
+    }
+    transcriptHtml = bodyKids.map(k => k.outerHTML).join('');
+
+    // Read the two generated report documents (if any)
+    if (dirHandle) {
+      const pMd = await readSessionFile(reportFileName(fileName, 'protocol'), dirHandle, true);
+      if (pMd && pMd.trim()) protocolHtml = mdToHtml(pMd);
+      const rMd = await readSessionFile(reportFileName(fileName, 'recap'), dirHandle, true);
+      if (rMd && rMd.trim()) recapHtml = mdToHtml(rMd);
+    }
+    // Backward-compat: an old inline summary becomes the Minutes tab
+    if (!protocolHtml && preambleHtml) protocolHtml = preambleHtml;
+  }
+
+  const tabs = [];
+  if (protocolHtml) tabs.push({ id: 'protocol', label: t('export_tab_protocol'), cls: 'tab-protocol', html: protocolHtml });
+  if (recapHtml)    tabs.push({ id: 'recap',    label: t('export_tab_recap'),    cls: 'tab-recap',    html: recapHtml });
+  if (transcriptHtml.trim())
+    tabs.push({ id: 'transcript', label: t('export_tab_transcript'), cls: 'tab-transcript', html: `<div class="ov-flow">${transcriptHtml}</div>` });
+  if (!tabs.length)
+    tabs.push({ id: 'transcript', label: t('export_tab_transcript'), cls: 'tab-transcript', html: `<p class="empty">${escHtml(t('export_empty_transcript'))}</p>` });
+
+  const showTabBar = tabs.length > 1;
+  const navHtml = showTabBar
+    ? `<nav class="tabs">${tabs.map((tb, i) => `<button class="tab${i === 0 ? ' active' : ''}" data-tab="${tb.id}">${escHtml(tb.label)}</button>`).join('')}</nav>`
+    : '';
+  const panelsHtml = tabs.map((tb, i) =>
+    `<section class="tab-panel ${tb.cls}${i === 0 ? ' active' : ''}" data-panel="${tb.id}" data-label="${escHtml(tb.label)}">${tb.html}</section>`
+  ).join('');
+
+  const metaBits = [dateLabel, timeLabel, durationLabel].filter(Boolean).join('  ·  ');
+  const chips = participants.map(p =>
+    `<span class="chip"><span class="dot" style="background:${speakerColor(p)}"></span>${escHtml(p)}</span>`
+  ).join('');
+  const screenChip = screenCount > 0
+    ? `<span class="chip chip-muted">${screenCount} ${escHtml(pl(screenCount, ['экран','экрана','экранов'], ['screen','screens']))}</span>`
+    : '';
+  const genDate = new Date().toLocaleDateString(locale, { day: 'numeric', month: 'short', year: 'numeric' });
 
   return `<!DOCTYPE html>
-<html lang="ru">
+<html lang="${lang}">
 <head>
 <meta charset="utf-8">
-<title>${escHtml(fileName || 'Transcript')}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escHtml(docTitle)}</title>
 <style>
+  :root {
+    --pg: #eceef2; --sheet: #ffffff; --tx: #1a1f2b; --dim: #667085;
+    --bd: #e4e7ee; --bd2: #eef0f4; --sur: #f7f8fa;
+    --acc: #2f4a7c; --acc-soft: #eef2f8;
+    --sp: 4px;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
   body {
-    background: ${v('--bg2')}; color: ${v('--text')};
-    font-family: system-ui, -apple-system, sans-serif;
-    font-size: 14px; line-height: 1.5;
-    max-width: 860px; margin: 40px auto; padding: 0 24px;
+    background: var(--pg); color: var(--tx);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    font-size: 15px; line-height: 1.6; margin: 0;
+    padding: clamp(0px, 4vw, 40px);
   }
-  .ov-meta { color: ${v('--dim')}; font-size: 11px; margin-bottom: 12px; }
-  .ov-bubble { display: flex; gap: 8px; margin-bottom: 10px; }
-  .ov-bubble .b-avatar {
-    width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 11px; font-weight: 700; color: #fff;
+  .doc {
+    max-width: 840px; margin: 0 auto; background: var(--sheet);
+    border-top: 3px solid var(--acc); border-radius: 0 0 4px 4px;
+    box-shadow: 0 1px 2px rgba(20,25,40,.05), 0 10px 44px rgba(20,25,40,.08);
   }
-  .ov-bubble .b-body { flex: 1; min-width: 0; }
-  .ov-bubble .b-speaker { font-size: 10px; font-weight: 600; margin-bottom: 2px; }
-  .ov-bubble .b-text {
-    background: ${v('--bg3')}; border: 1px solid ${v('--border')}; border-radius: 0 10px 10px 10px;
-    padding: 7px 11px; font-size: 13px; line-height: 1.5; word-break: break-word;
-    display: inline-block; max-width: 100%;
+  /* ── Cover header ── */
+  .doc-head {
+    padding: clamp(30px, 6vw, 52px) clamp(22px, 5vw, 60px) clamp(22px, 4vw, 30px);
   }
-  .ov-bubble .b-ts { font-size: 10px; color: ${v('--dim')}; margin-top: 3px; }
+  .brand {
+    font-size: 11.5px; font-weight: 700; letter-spacing: .12em;
+    color: var(--acc); text-transform: uppercase; margin-bottom: 16px;
+  }
+  .doc-title {
+    font-size: clamp(24px, 5vw, 33px); font-weight: 700; line-height: 1.18;
+    margin: 0 0 14px; letter-spacing: -.015em; word-break: break-word;
+  }
+  .doc-meta { color: var(--dim); font-size: 13.5px; font-weight: 500; font-variant-numeric: tabular-nums; }
+  .doc-people { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 18px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 7px;
+    background: var(--sur); border: 1px solid var(--bd);
+    border-radius: 100px; padding: 4px 12px 4px 10px;
+    font-size: 12.5px; font-weight: 500; color: var(--tx);
+  }
+  .chip .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .chip-muted { color: var(--dim); }
+  /* ── Tab bar ── */
+  .tabs {
+    display: flex; flex-wrap: wrap; gap: 0 26px;
+    padding: 0 clamp(22px, 5vw, 60px); border-bottom: 1px solid var(--bd);
+    position: sticky; top: 0; background: var(--sheet); z-index: 3;
+  }
+  .tab {
+    appearance: none; -webkit-appearance: none; background: none; border: none; font: inherit;
+    font-size: 13.5px; font-weight: 600; color: var(--dim); cursor: pointer;
+    padding: 15px 2px; border-bottom: 2px solid transparent; margin-bottom: -1px;
+  }
+  .tab:hover { color: var(--tx); }
+  .tab.active { color: var(--acc); border-bottom-color: var(--acc); }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+  /* ── Body ── */
+  .doc-body { padding: clamp(24px, 4vw, 38px) clamp(22px, 5vw, 60px) clamp(30px, 5vw, 48px); }
+  .empty { color: var(--dim); font-size: 14px; }
+  /* ── Transcript as a document (no chat bubbles) ── */
+  .ov-flow { display: block; }
+  .ov-meta { color: var(--dim); font-size: 12.5px; margin: 6px 0; }
+  .tab-transcript .ov-bubble { display: block; margin: 0 0 18px; }
+  .tab-transcript .ov-bubble.cont { margin-top: -8px; }
+  .tab-transcript .b-avatar { display: none; }
+  .tab-transcript .b-body { display: flex; flex-direction: column; min-width: 0; }
+  .tab-transcript .b-speaker { order: 1; font-size: 13.5px; font-weight: 700; color: var(--tx) !important; margin: 0; }
+  .tab-transcript .b-ts { order: 2; font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; letter-spacing: .03em; margin: 2px 0 6px; }
+  .tab-transcript .ov-bubble.cont .b-speaker, .tab-transcript .ov-bubble.cont .b-ts { display: none; }
+  .tab-transcript .b-text {
+    order: 3; background: none !important; border: none !important; padding: 0 !important;
+    margin: 0; max-width: none !important; font-size: 14.5px; line-height: 1.7; color: var(--tx);
+  }
+  .tab-transcript .ov-bubble.cont .b-text { margin-top: 9px; }
+  /* ── Screenshot figures (inside transcript) ── */
   .ov-screenshot {
-    display: flex; gap: 14px; align-items: flex-start;
-    background: ${v('--bg3')}; border: 1px solid ${v('--border')};
-    border-radius: 10px; padding: 12px; margin: 10px 0;
+    display: flex; gap: 18px; align-items: flex-start;
+    background: var(--sur); border: 1px solid var(--bd);
+    border-radius: 10px; padding: 16px; margin: 22px 0;
   }
-  .ov-screenshot img { width: 200px; height: auto; border-radius: 6px; border: 1px solid ${v('--border')}; flex-shrink: 0; display: block; }
+  .ov-screenshot img { width: 240px; max-width: 100%; height: auto; border-radius: 6px; border: 1px solid var(--bd); flex-shrink: 0; display: block; }
   .ov-scr-info { flex: 1; min-width: 0; }
-  .ov-scr-ts { font-size: 11px; color: ${v('--dim')}; margin-bottom: 5px; }
-  .ov-scr-summary { font-size: 13px; color: ${v('--text')}; margin-bottom: 6px; line-height: 1.4; }
+  .ov-scr-ts { font-size: 11px; font-weight: 700; letter-spacing: .06em; color: var(--acc); text-transform: uppercase; margin-bottom: 8px; }
+  .ov-scr-summary { font-size: 14px; color: var(--tx); margin-bottom: 8px; line-height: 1.55; }
   .ov-scr-toggle {
-    background: none; border: 1px solid ${v('--border')}; border-radius: 6px;
-    font-size: 11px; padding: 3px 9px; cursor: pointer; color: ${v('--dim')};
+    background: none; border: 1px solid var(--bd); border-radius: 6px;
+    font-size: 12px; padding: 4px 11px; cursor: pointer; color: var(--dim);
     margin-bottom: 6px; display: inline-block;
   }
-  .ov-scr-toggle:hover { background: ${v('--bg')}; }
-  .ov-scr-body { font-size: 12px; display: none; }
-  .ov-md h1, .ov-md h2 { font-size: 15px; font-weight: 700; margin: 16px 0 6px; border-bottom: 1px solid ${v('--border')}; padding-bottom: 4px; }
-  .ov-md h3 { font-size: 13px; font-weight: 600; margin: 12px 0 4px; }
-  .ov-md h4, .ov-md h5, .ov-md h6 { font-size: 12px; font-weight: 600; margin: 10px 0 3px; color: ${v('--dim')}; }
-  .ov-md p { margin: 0 0 8px; }
-  .ov-md ul, .ov-md ol { padding-left: 20px; margin: 0 0 8px; }
-  .ov-md li { margin-bottom: 3px; }
+  .ov-scr-toggle:hover { background: var(--acc-soft); border-color: var(--acc); color: var(--acc); }
+  .ov-scr-body { font-size: 13px; display: none; margin-top: 4px; }
+  /* ── Markdown documents (Minutes / Recap) ── */
+  .ov-md { font-size: 15px; }
+  .ov-md h1 { font-size: 23px; font-weight: 700; margin: 26px 0 12px; line-height: 1.22; letter-spacing: -.01em; }
+  .ov-md h1:first-child, .ov-md h2:first-child, .ov-md h3:first-child { margin-top: 0; }
+  .ov-md h2 { font-size: 17px; font-weight: 700; margin: 30px 0 10px; }
+  .ov-md h3 { font-size: 14.5px; font-weight: 700; margin: 20px 0 6px; }
+  .ov-md h4, .ov-md h5, .ov-md h6 { font-size: 12.5px; font-weight: 700; margin: 16px 0 4px; color: var(--dim); text-transform: uppercase; letter-spacing: .04em; }
+  .ov-md p { margin: 0 0 12px; }
+  .ov-md ul, .ov-md ol { padding-left: 22px; margin: 0 0 12px; }
+  .ov-md li { margin-bottom: 6px; }
+  .ov-md li::marker { color: var(--acc); }
   .ov-md strong { font-weight: 700; }
   .ov-md em { font-style: italic; }
-  .ov-md hr { border: none; border-top: 1px solid ${v('--border')}; margin: 12px 0; }
-  .ov-md code { font-family: monospace; font-size: 11px; background: ${v('--bg3')}; color: ${v('--accent')}; padding: 1px 5px; border-radius: 4px; }
-  .ov-md pre { background: ${v('--bg3')}; border: 1px solid ${v('--border')}; border-radius: 8px; padding: 10px 12px; margin: 0 0 10px; overflow-x: auto; }
-  .ov-md pre code { background: none; color: ${v('--text')}; padding: 0; font-size: 12px; }
-  .ov-md .ov-table { width: 100%; border-collapse: collapse; margin: 8px 0 14px; font-size: 12px; }
-  .ov-md .ov-table th { background: ${v('--bg3')}; font-weight: 600; text-align: left; padding: 6px 10px; border: 1px solid ${v('--border')}; color: ${v('--dim')}; font-size: 11px; text-transform: uppercase; }
-  .ov-md .ov-table td { padding: 6px 10px; border: 1px solid ${v('--border')}; vertical-align: top; line-height: 1.4; }
-  .ov-md .ov-table tr:nth-child(even) td { background: ${v('--bg2')}; }
-  .sep { border: none; border-top: 2px solid ${v('--border')}; margin: 20px 0; }
+  .ov-md hr { border: none; border-top: 1px solid var(--bd); margin: 20px 0; }
+  .ov-md code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 13px; background: var(--acc-soft); color: var(--acc); padding: 1px 6px; border-radius: 5px; }
+  .ov-md pre { background: var(--sur); border: 1px solid var(--bd); border-radius: 8px; padding: 12px 14px; margin: 0 0 12px; overflow-x: auto; }
+  .ov-md pre code { background: none; color: var(--tx); padding: 0; font-size: 13px; }
+  .ov-md blockquote { margin: 0 0 14px; padding: 6px 0 6px 18px; border-left: 3px solid var(--acc); color: var(--dim); }
+  .ov-md .ov-table-wrap { overflow-x: auto; margin: 12px 0 18px; }
+  .ov-md .ov-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  .ov-md .ov-table th { background: var(--sur); font-weight: 700; text-align: left; padding: 9px 13px; border: 1px solid var(--bd); color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  .ov-md .ov-table td { padding: 9px 13px; border: 1px solid var(--bd); vertical-align: top; line-height: 1.5; }
+  .ov-md .ov-table tr:nth-child(even) td { background: var(--sur); }
+  .ov-md .ov-table th:not(:first-child), .ov-md .ov-table td:not(:first-child) { white-space: nowrap; }
+  /* Numbered sections for the Minutes tab */
+  .tab-protocol .ov-md { counter-reset: sec; }
+  .tab-protocol .ov-md h2 { counter-increment: sec; padding-top: 4px; }
+  .tab-protocol .ov-md h2::before {
+    content: counter(sec, decimal-leading-zero); display: block;
+    font-size: 12px; font-weight: 700; color: var(--acc); letter-spacing: .12em; margin-bottom: 3px;
+  }
+  /* Recap reads like prose */
+  .tab-recap .ov-md { font-size: 15.5px; }
+  .tab-recap .ov-md p { line-height: 1.78; margin-bottom: 14px; }
+  /* ── Footer ── */
+  .doc-foot {
+    padding: 18px clamp(22px, 5vw, 60px); border-top: 1px solid var(--bd);
+    color: var(--dim); font-size: 12px; display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  }
+  .doc-foot .brand-mini { font-weight: 700; color: var(--acc); letter-spacing: .02em; }
+  /* ── Responsive ── */
+  @media (max-width: 600px) {
+    .ov-screenshot { flex-direction: column; }
+    .ov-screenshot img { width: 100%; }
+    .tabs { gap: 0 18px; }
+  }
+  /* ── Print / PDF: reveal every tab, stacked with its label ── */
+  @media print {
+    body { background: #fff; padding: 0; }
+    .doc { box-shadow: none; max-width: none; border-radius: 0; border-top: none; }
+    @page { margin: 16mm; }
+    .tabs { display: none; }
+    .tab-panel { display: block !important; }
+    .tab-panel + .tab-panel { margin-top: 34px; padding-top: 26px; border-top: 1px solid var(--bd); }
+    .tab-panel::before {
+      content: attr(data-label); display: block; font-size: 11px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: .1em; color: var(--acc); margin: 0 0 16px;
+    }
+    .doc-head, .ov-bubble, .ov-screenshot, .ov-md h1, .ov-md h2, .ov-md .ov-table { break-inside: avoid; }
+    * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
 </style>
 </head>
 <body>
-${el.innerHTML}
+<div class="doc">
+  <header class="doc-head">
+    <div class="brand">🎙 MeetScribe</div>
+    <h1 class="doc-title">${escHtml(docTitle)}</h1>
+    ${metaBits ? `<div class="doc-meta">${escHtml(metaBits)}</div>` : ''}
+    ${(chips || screenChip) ? `<div class="doc-people">${chips}${screenChip}</div>` : ''}
+  </header>
+  ${navHtml}
+  <main class="doc-body">${panelsHtml}</main>
+  <footer class="doc-foot">
+    <span><span class="brand-mini">${escHtml(t('export_footer'))}</span></span>
+    <span>${escHtml(genDate)}</span>
+  </footer>
+</div>
 <script>
-document.querySelectorAll('.ov-scr-toggle').forEach(btn => {
-  btn.addEventListener('click', () => {
-    const body = btn.nextElementSibling;
-    const open = body && body.style.display === 'block';
+var C = ${JSON.stringify(t('ov_content_collapsed'))}, E = ${JSON.stringify(t('ov_content_expanded'))};
+document.querySelectorAll('.ov-scr-toggle').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    var body = btn.nextElementSibling;
+    var open = body && body.style.display === 'block';
     if (body) body.style.display = open ? 'none' : 'block';
-    btn.textContent = open ? t('ov_content_collapsed') : t('ov_content_expanded');
+    btn.textContent = open ? C : E;
+  });
+});
+document.querySelectorAll('.tab').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    var id = btn.getAttribute('data-tab');
+    document.querySelectorAll('.tab').forEach(function(b) { b.classList.toggle('active', b === btn); });
+    document.querySelectorAll('.tab-panel').forEach(function(p) { p.classList.toggle('active', p.getAttribute('data-panel') === id); });
+    window.scrollTo({ top: 0 });
   });
 });
 <\/script>
@@ -5542,58 +5782,6 @@ function getLastSummaryModel(modelOptions) {
   return modelOptions[0] || null;
 }
 
-function pickSummarizeOptions(prompts, modelOptions, anchorEl) {
-  return new Promise(resolve => {
-    const rect = anchorEl.getBoundingClientRect();
-    const dd = document.createElement('div');
-    dd.className = 'prompt-dropdown';
-    dd.style.minWidth = '210px';
-    document.body.appendChild(dd);
-
-    let selectedModel = getLastSummaryModel(modelOptions);
-
-    const render = () => {
-      dd.innerHTML =
-        `<div class="prompt-dropdown-hint">${t('chat_prompt_dropdown_hint')}</div>` +
-        prompts.map((p, i) => `<button class="prompt-opt" data-i="${i}">${escHtml(p.name)}</button>`).join('') +
-        `<div class="summ-model-sep"></div>` +
-        `<div class="prompt-dropdown-hint" style="border-bottom:none;margin-bottom:2px">${t('chat_model_dropdown_hint')}</div>` +
-        modelOptions.map(o => {
-          const sel = selectedModel && o.provider === selectedModel.provider && o.model === selectedModel.model;
-          return `<button class="summ-model-btn${sel ? ' selected' : ''}" data-p="${escHtml(o.provider)}" data-m="${escHtml(o.model)}">${escHtml(o.label)}</button>`;
-        }).join('');
-
-      dd.querySelectorAll('.prompt-opt').forEach(btn => {
-        btn.addEventListener('click', () => {
-          close({ promptText: prompts[+btn.dataset.i].text, model: selectedModel });
-        });
-      });
-      dd.querySelectorAll('.summ-model-btn').forEach(btn => {
-        btn.addEventListener('click', e => {
-          e.stopPropagation();
-          selectedModel = modelOptions.find(o => o.provider === btn.dataset.p && o.model === btn.dataset.m) || selectedModel;
-          localStorage.setItem('meetscribe_last_summary_model', JSON.stringify({ provider: selectedModel.provider, model: selectedModel.model }));
-          render();
-        });
-      });
-    };
-
-    render();
-
-    const totalRows = prompts.length + modelOptions.length + 3;
-    const ddH = totalRows * 34 + 20;
-    const spaceBelow = window.innerHeight - rect.bottom;
-    const top = spaceBelow > ddH ? rect.bottom + 4 : rect.top - ddH - 4;
-    dd.style.top = Math.max(4, top) + 'px';
-    dd.style.left = Math.max(4, rect.right - (dd.offsetWidth || 210)) + 'px';
-
-    const close = val => { dd.remove(); outsideHandler(); resolve(val); };
-    const outsideHandler = () => document.removeEventListener('mousedown', onOutside);
-    const onOutside = e => { if (!dd.contains(e.target)) { dd.remove(); outsideHandler(); resolve(null); } };
-    setTimeout(() => document.addEventListener('mousedown', onOutside), 0);
-  });
-}
-
 function pickPrompt(prompts, anchorEl) {
   return new Promise(resolve => {
     // Position dropdown near the anchor button
@@ -6620,7 +6808,13 @@ async function buildPipelineBar(mergedText, fileName, dirHandle, baseTxtName, on
   const hasLines = /\[\d+:\d+:\d+\]/.test(bodyText);
   const unanalyzed = (mergedText.match(/\[SCREENSHOT:/g) || []).length;
   const analyzed = (mergedText.match(/\[SCREEN:/g) || []).length;
-  const hasSummary = /^\s*#/.test(mergedText);
+  // A report exists either as a generated document file, or (legacy) inline in the transcript
+  let hasSummary = /^\s*#/.test(mergedText);
+  if (!hasSummary) {
+    for (const kind of ['protocol', 'recap']) {
+      try { await dirHandle.getFileHandle(reportFileName(baseName, kind)); hasSummary = true; break; } catch {}
+    }
+  }
 
   const dir = dirHandle.name;
   const run = action => handleSessionAction(action, baseName, bar, aiFileName, dirHandle);
@@ -7047,51 +7241,83 @@ async function deleteSessionFiles(dirName) {
 }
 
 // Core summarization — write a report into targetFile using promptText + model.
-// Extracted so both the ✨ picker flow and the auto-pipeline can call it.
-async function summarizeInto(targetFile, dirHandle, promptText, model) {
-  const text = await readSessionFile(targetFile, dirHandle);
+// ── Report documents: Protocol (formal minutes) + Recap (narrative) ──────────
+// Each is a standalone Markdown file in the session folder, generated from the
+// transcript by its own built-in prompt. The HTML export shows them as tabs.
+// AI prompts stay in Russian (see CLAUDE.md — the user wants Russian output).
+const PROMPT_PROTOCOL =
+`Ты составляешь официальный протокол рабочей встречи на основе транскрипции. Пиши деловым, нейтральным языком. Опирайся только на факты из транскрипции, ничего не выдумывай.
+
+Верни Markdown строго по структуре:
+
+## Повестка
+Короткий список обсуждавшихся тем.
+
+## Решения
+Маркированный список принятых решений. Если решений не было — напиши «Явных решений не зафиксировано».
+
+## Задачи
+Таблица: | Задача | Ответственный | Срок |. Если срок или ответственный не назван — поставь «—». Если задач нет — пропусти раздел.
+
+## Открытые вопросы
+Список нерешённых вопросов. Если их нет — пропусти раздел.
+
+Не добавляй вступлений, пояснений и приветствий — только протокол.
+
+Транскрипция:
+{{transcript}}`;
+
+const PROMPT_RECAP =
+`Ты пишешь связный пересказ рабочей встречи для коллеги, который на ней не был. Плавный повествовательный текст в 3–6 абзацах: о чём говорили, к чему пришли, какова была логика обсуждения. Без списков и таблиц, без канцелярита — живой, но деловой язык. Опирайся только на транскрипцию, ничего не додумывай.
+
+Начни сразу с пересказа, без заголовков и вступлений.
+
+Транскрипция:
+{{transcript}}`;
+
+const REPORT_SUFFIX = { protocol: '_protocol.md', recap: '_recap.md' };
+
+// Session base name (folder) from any transcript file: 2026-..._dg.txt → 2026-...
+function reportBaseName(transcriptFile) {
+  return transcriptFile.replace(/_(dg|groq|ai)\.(txt|md)$/i, '').replace(/\.(txt|md)$/i, '');
+}
+function reportFileName(transcriptFile, kind) {
+  return reportBaseName(transcriptFile) + REPORT_SUFFIX[kind];
+}
+
+// Generate one report document (kind: 'protocol' | 'recap') from a transcript file
+// and write it to its own .md in the session folder. Reused by the picker + auto-pipeline.
+async function generateReport(kind, transcriptFile, dirHandle, model) {
+  const text = await readSessionFile(transcriptFile, dirHandle);
   if (text === null) return false;
-  // Feed recognized screenshot descriptions to the LLM: they live in the base
-  // .txt, so when summarizing an accurate transcript (_dg/_ai/_groq) merge them
-  // in for the prompt only (don't persist them into the AI file).
-  let contextText = text;
-  const baseName = targetFile.replace(/_(dg|groq|ai)\.txt$/, '.txt');
-  if (baseName !== targetFile) {
+  // Summarize the transcript itself, not any stale report preamble that may sit on top
+  const lines0 = text.split('\n');
+  const tsIdx0 = lines0.findIndex(l => /^\[\d+:\d+:\d+\]/.test(l) || /^\[SCREENSHOT: /.test(l));
+  const transcriptOnly = tsIdx0 > 0 ? lines0.slice(tsIdx0).join('\n') : text;
+  // Fold recognized screenshot descriptions (they live in the base .txt) into the prompt
+  let contextText = transcriptOnly;
+  const baseName = transcriptFile.replace(/_(dg|groq|ai)\.txt$/, '.txt');
+  if (baseName !== transcriptFile) {
     const baseText = await readSessionFile(baseName, dirHandle, true);
-    if (baseText) contextText = mergeScreenshotLines(text, baseText);
+    if (baseText) contextText = mergeScreenshotLines(transcriptOnly, baseText);
   }
-  const modelLabel = model.provider === 'gemini' ? `Gemini / ${model.model}` : `${model.provider} / ${model.model}`;
-  const finalPrompt = promptText.includes('{{transcript}}')
-    ? promptText.replace('{{transcript}}', contextText)
-    : promptText + '\n\n' + contextText;
-  const spinToast = makeToast(`
-    <div class="toast-title"><span class="spinner"></span> ${t('summary_summarizing').replace('{file}', escHtml(targetFile))}</div>
-    <div style="font-size:12px;color:var(--dim)">${t('summary_generating').replace('{model}', escHtml(modelLabel))}</div>
-  `);
+  const promptText = kind === 'protocol' ? PROMPT_PROTOCOL : PROMPT_RECAP;
+  const finalPrompt = promptText.replace('{{transcript}}', contextText);
+  const kindLabel = t(kind === 'protocol' ? 'export_tab_protocol' : 'export_tab_recap');
+  const spinToast = makeToast(`<div class="toast-title"><span class="spinner"></span> ${t('report_generating').replace('{kind}', escHtml(kindLabel))}</div>`);
   try {
     const d = await callWithModelOption(model, { contents: [{ parts: [{ text: finalPrompt }] }] });
-    const minutes = stripCodeFence(d.candidates?.[0]?.content?.parts?.[0]?.text ?? '');
-    if (!minutes) throw new Error(t('error_summary_empty'));
-    const now = new Date();
-    const header =
-      t('summary_report_header') +
-      `${t('summary_generated_label')}${now.toLocaleDateString(_lang === 'ru' ? 'ru-RU' : 'en-US')} ${now.toLocaleTimeString(_lang === 'ru' ? 'ru-RU' : 'en-US',{hour:'2-digit',minute:'2-digit'})}\n` +
-      `${t('summary_model_label')}${modelLabel}\n\n` +
-      `---\n\n${minutes}\n\n---\n\n`;
-    const baseLines = text.split('\n');
-    const meetIdx = baseLines.findIndex(l => l.startsWith('MeetScribe'));
-    const tsIdx = baseLines.findIndex(l => /^\[\d+:\d+:\d+\]/.test(l));
-    const cutIdx = meetIdx >= 0 ? meetIdx : (tsIdx >= 0 ? tsIdx : 0);
-    const transcriptPart = baseLines.slice(cutIdx).join('\n');
-    const fh = await dirHandle.getFileHandle(targetFile, { create: false });
+    const md = stripCodeFence(d.candidates?.[0]?.content?.parts?.[0]?.text ?? '');
+    if (!md) throw new Error(t('error_summary_empty'));
+    const fh = await dirHandle.getFileHandle(reportFileName(transcriptFile, kind), { create: true });
     const w = await fh.createWritable();
-    await w.write(header + transcriptPart);
+    await w.write(md.trim() + '\n');
     await w.close();
     removeToast(spinToast);
-    autoToast(`<div class="toast-title">${t('toast_summarized')}</div><div style="font-size:12px;color:var(--dim)">${escHtml(targetFile)}</div>`, 4000);
+    autoToast(`<div class="toast-title">${t('report_done')}</div><div style="font-size:12px;color:var(--dim)">${escHtml(kindLabel)}</div>`, 3500);
     return true;
   } catch(e) {
-    console.error('summarize file error', e);
+    console.error('generateReport', kind, e);
     removeToast(spinToast);
     showError(t('error_summarize') + e.message);
     return false;
@@ -7118,10 +7344,11 @@ async function autoProcess(name, dirHandle) {
     // 2. Recognize screenshots (no-op if there are none)
     await analyzeScreenshots(name, dirHandle, models[0]);
 
-    // 3. Summarize the best transcript with the first prompt + last-used model
-    const prompts = await loadPrompts();
+    // 3. Generate both report documents (Protocol + Recap) with the last-used model
     const model = getLastSummaryModel(models) || models[0];
-    await summarizeInto(aiFile || name, dirHandle, prompts[0].text, model);
+    const targetFile = aiFile || name;
+    await generateReport('protocol', targetFile, dirHandle, model);
+    await generateReport('recap', targetFile, dirHandle, model);
   } catch(e) { console.error('autoProcess', e); }
 }
 
@@ -7167,13 +7394,23 @@ async function handleSessionAction(action, name, anchorEl, aiFile, dirHandle = S
     if (text !== null) downloadBlob(toMd(text), dlFile.replace(/\.txt$/, '.md'), 'text/markdown');
   }
   if (action === 'summarize') {
-    const targetFile = aiFile || name;  // file we summarize AND write back into
-    const [prompts, modelOptions] = await Promise.all([loadPrompts(), getModelOptions()]);
+    const targetFile = aiFile || name;  // transcript the reports are generated from
+    const modelOptions = await getModelOptions();
     if (!modelOptions.length) { showError(t('error_no_rest_keys'), 0); return; }
 
-    const result = await pickSummarizeOptions(prompts, modelOptions, anchorEl);
-    if (!result) return;
-    await summarizeInto(targetFile, dirHandle, result.promptText, result.model);
+    // Pick which document(s) to generate, then the model
+    const kind = await showDropdown([
+      { label: '📋 ' + t('export_tab_protocol'), value: 'protocol' },
+      { label: '📝 ' + t('export_tab_recap'),    value: 'recap' },
+      { label: '📋📝 ' + t('report_both'),        value: 'both' },
+    ], anchorEl);
+    if (!kind) return;
+    const model = await pickModel(modelOptions, anchorEl);
+    if (!model) return;
+    localStorage.setItem('meetscribe_last_summary_model', JSON.stringify({ provider: model.provider, model: model.model }));
+
+    const kinds = kind === 'both' ? ['protocol', 'recap'] : [kind];
+    for (const k of kinds) await generateReport(k, targetFile, dirHandle, model);
   }
   if (action === 'rename') {
     const toast = showRenameToast(name, '', aiFile, dirHandle);
