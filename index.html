@@ -4966,6 +4966,7 @@ function validateMedia(file) {
       clearTimeout(to);
       const duration = isFinite(el.duration) ? el.duration : 0;
       if (!duration) { finish({ ok: false }); return; }
+      const hasVideo = el.videoWidth > 0 && el.videoHeight > 0;
       let hasAudio = true;
       try {
         el.currentTime = Math.min(0.1, duration / 2);
@@ -4974,7 +4975,7 @@ function validateMedia(file) {
         el.pause();
         if (typeof el.webkitAudioDecodedByteCount === 'number') hasAudio = el.webkitAudioDecodedByteCount > 0;
       } catch {}
-      finish({ ok: true, duration, hasAudio });
+      finish({ ok: true, duration, hasAudio, hasVideo });
     });
   });
 }
@@ -5006,7 +5007,10 @@ function showImportDialog(file, meta) {
       <label style="flex:1;font-size:11px;color:var(--dim)">${t('import_date')}<input type="date" id="import-date" value="${dateVal}" style="width:100%;margin-top:3px"></label>
       <label style="width:104px;font-size:11px;color:var(--dim)">${t('import_time')}<input type="time" id="import-time" value="${timeVal}" style="width:100%;margin-top:3px"></label>
     </div>
-    <label style="display:block;font-size:11px;color:var(--dim);margin-bottom:12px">${t('import_name')}<input type="text" id="import-name" value="${escHtml(titleSlug)}" maxlength="40" style="width:100%;margin-top:3px"></label>
+    <label style="display:block;font-size:11px;color:var(--dim);margin-bottom:10px">${t('import_name')}<input type="text" id="import-name" value="${escHtml(titleSlug)}" maxlength="40" style="width:100%;margin-top:3px"></label>
+    ${meta.hasVideo ? `<label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;font-size:12px;margin-bottom:12px">
+      <input type="checkbox" id="import-frames" style="accent-color:var(--accent);flex-shrink:0">
+      <span>${t('import_frames')}</span></label>` : ''}
     <div class="toast-btns">
       <button class="primary" id="import-ok">${t('import_ok')}</button>
       <button id="import-cancel">${t('import_cancel')}</button>
@@ -5018,13 +5022,15 @@ function showImportDialog(file, meta) {
     const tm = toast.querySelector('#import-time').value || '00:00';
     if (!d) { showError(t('import_err_date')); return; }
     const nm = (toast.querySelector('#import-name').value || '').replace(/[^a-zA-Z0-9а-яА-ЯёЁ\s\-_]/g, '').replace(/\s+/g, '-').slice(0, 40);
+    const extractFrames = !!toast.querySelector('#import-frames')?.checked;
     removeToast(toast);
-    await doImport(file, d, tm, nm);
+    await doImport(file, d, tm, nm, extractFrames);
   };
 }
 
-async function doImport(file, dateStr, timeStr, titleSlug) {
+async function doImport(file, dateStr, timeStr, titleSlug, extractFrames) {
   const spin = makeToast(`<div class="toast-title"><span class="spinner"></span> ${t('import_saving')}</div>`);
+  let screenCount = 0;
   try {
     const pad = n => String(n).padStart(2, '0');
     const [Y, Mo, Da] = dateStr.split('-').map(Number);
@@ -5046,14 +5052,105 @@ async function doImport(file, dateStr, timeStr, titleSlug) {
     w = await (await dir.getFileHandle(dirName + '.txt', { create: true })).createWritable();
     await w.write(hdr); await w.close();
 
+    // Optional: pull slide frames out of an imported video (offline scene detect)
+    if (extractFrames) {
+      const setStatus = s => { const el = spin.querySelector('.toast-title'); if (el) el.innerHTML = `<span class="spinner"></span> ${s}`; };
+      screenCount = await extractFramesFromVideo(file, dir, dirName, (done, total) =>
+        setStatus(t('import_extracting').replace('{p}', Math.round(done / total * 100)))).catch(() => 0);
+    }
+
     removeToast(spin);
-    const rec = { name: dirName + '.txt', dirName, dirHandle: dir, lastModified: dObj.getTime(), aiFile: null, hasWebm: true, hasScreens: false };
+    const rec = { name: dirName + '.txt', dirName, dirHandle: dir, lastModified: dObj.getTime(), aiFile: null, hasWebm: true, hasScreens: screenCount > 0 };
     if (Array.isArray(S.sessionFiles)) updateSessionIndex(list => { if (!list.some(f => f.dirName === rec.dirName)) list.unshift(rec); });
     else loadSessions();
     autoToast(`<div class="toast-title">${t('import_done')}</div><div style="font-size:12px;color:var(--dim)">${escHtml(dirName)}/</div>`, 4000);
   } catch(e) {
     removeToast(spin);
     showError(t('import_err_save') + e.message);
+  }
+}
+
+// Extract slide frames from an imported video by seeking through it and running
+// the same scene-change detection as the live grabber. Writes JPEGs into
+// screenshots/ and appends [SCREENSHOT:] markers into the base .txt. Returns count.
+async function extractFramesFromVideo(file, dir, dirName, onProgress) {
+  const url = URL.createObjectURL(file);
+  const video = document.createElement('video');
+  video.muted = true; video.preload = 'auto'; video.src = url;
+  try {
+    await new Promise((res, rej) => { video.onloadedmetadata = res; video.onerror = () => rej(new Error('load')); });
+    const dur = video.duration;
+    if (!isFinite(dur) || !dur || !video.videoWidth) return 0;
+
+    const screensDir = await dir.getDirectoryHandle('screenshots', { create: true });
+    const CMP_W = 96, CMP_H = 54;
+    const cmp = document.createElement('canvas'); cmp.width = CMP_W; cmp.height = CMP_H;
+    const cctx = cmp.getContext('2d', { willReadFrequently: true });
+    const cap = document.createElement('canvas'); const capctx = cap.getContext('2d');
+    const PIP_X = Math.floor(CMP_W * 0.78), PIP_Y = Math.floor(CMP_H * 0.25);
+    const calcDiff = (a, b) => {
+      let d = 0, tot = 0;
+      for (let py = 0; py < CMP_H; py++) for (let px = 0; px < CMP_W; px++) {
+        if (px >= PIP_X && py < PIP_Y) continue;
+        tot++; const i = (py * CMP_W + px) * 4;
+        if ((Math.abs(a[i]-b[i]) + Math.abs(a[i+1]-b[i+1]) + Math.abs(a[i+2]-b[i+2])) / 3 > 20) d++;
+      }
+      return d / tot;
+    };
+    const seek = time => new Promise(res => {
+      const h = () => { video.removeEventListener('seeked', h); res(); };
+      video.addEventListener('seeked', h);
+      video.currentTime = Math.min(time, dur - 0.05);
+    });
+    const pad = n => String(n).padStart(2, '0');
+
+    const STEP = 2;      // sample every 2s
+    const MIN_GAP = 8;   // min seconds between captures
+    let prev = null, pending = null, lastCapT = -999, count = 0;
+    const markers = [];
+
+    for (let time = 0; time < dur; time += STEP) {
+      await seek(time);
+      cctx.drawImage(video, 0, 0, CMP_W, CMP_H);
+      const curr = cctx.getImageData(0, 0, CMP_W, CMP_H).data;
+      if (prev) {
+        if (pending) {
+          if (calcDiff(curr, pending) < 0.05) {
+            if (time - lastCapT >= MIN_GAP) {
+              const scale = Math.min(1, 1280 / video.videoWidth);
+              cap.width = Math.round(video.videoWidth * scale); cap.height = Math.round(video.videoHeight * scale);
+              capctx.drawImage(video, 0, 0, cap.width, cap.height);
+              const blob = await new Promise(r => cap.toBlob(r, 'image/jpeg', 0.85));
+              if (blob) {
+                count++;
+                const hh = pad(Math.floor(time / 3600)), mm = pad(Math.floor(time % 3600 / 60)), ss = pad(Math.floor(time % 60));
+                const fname = `screen_${hh}-${mm}-${ss}_${String(count).padStart(3, '0')}.jpg`;
+                const fh = await screensDir.getFileHandle(fname, { create: true });
+                const wr = await fh.createWritable(); await wr.write(blob); await wr.close();
+                markers.push(`[SCREENSHOT: ${fname}]`);
+                lastCapT = time;
+              }
+            }
+            pending = null;
+          } else { pending = new Uint8ClampedArray(curr); }
+        } else if (calcDiff(curr, prev) > 0.12) {
+          pending = new Uint8ClampedArray(curr);
+        }
+      }
+      prev = new Uint8ClampedArray(curr);
+      if (onProgress) onProgress(time, dur);
+    }
+
+    if (markers.length) {
+      const tfh = await dir.getFileHandle(dirName + '.txt', { create: false });
+      const existing = await (await tfh.getFile()).text();
+      const wr = await tfh.createWritable();
+      await wr.write(existing.replace(/\n+$/, '') + '\n' + markers.join('\n') + '\n');
+      await wr.close();
+    }
+    return count;
+  } finally {
+    URL.revokeObjectURL(url);
   }
 }
 
