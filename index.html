@@ -3094,24 +3094,51 @@ async function toHtml(txt, fileName, dirHandle = null, baseTxtName = null) {
   const screenCount = (mergedText.match(/\[SCREENSHOT: /g) || []).length;
 
   // ── Build tab content: Minutes (protocol) · Recap · Transcript ───────────
-  // Renders a markdown string and wraps wide tables so they scroll on mobile.
-  const mdToHtml = (mdText) => {
-    const d = renderMarkdown(mdText);
+  const TS_RE = /\[(\d{1,2}):(\d{2}):(\d{2})\]/g;
+  // Turn [HH:MM:SS] citations inside a report into clickable anchors → transcript
+  const linkCites = (root) => {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const targets = [];
+    let node; while ((node = walker.nextNode())) { TS_RE.lastIndex = 0; if (TS_RE.test(node.nodeValue)) targets.push(node); }
+    targets.forEach(n => {
+      const s = n.nodeValue; const frag = document.createDocumentFragment();
+      let last = 0, m; TS_RE.lastIndex = 0;
+      while ((m = TS_RE.exec(s))) {
+        if (m.index > last) frag.appendChild(document.createTextNode(s.slice(last, m.index)));
+        const a = document.createElement('a');
+        a.className = 'cite'; a.dataset.ts = (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]); a.textContent = m[0];
+        frag.appendChild(a); last = m.index + m[0].length;
+      }
+      if (last < s.length) frag.appendChild(document.createTextNode(s.slice(last)));
+      n.parentNode.replaceChild(frag, n);
+    });
+  };
+  // Strip the model/date metadata comment we store on report files
+  const parseMeta = (mdText) => {
+    const m = mdText.match(/^\s*<!--\s*meetscribe:report\s+model="([^"]*)"\s+date="([^"]*)"\s*-->\s*/);
+    return m ? { model: m[1], date: m[2], body: mdText.slice(m[0].length) } : { model: '', date: '', body: mdText };
+  };
+  const fmtGen = (iso) => { try { return iso ? new Date(iso).toLocaleDateString(locale, { day: 'numeric', month: 'short', year: 'numeric' }) : ''; } catch { return ''; } };
+  const captionHtml = (parts) => { const s = parts.filter(Boolean).join('  ·  '); return s ? `<div class="doc-cap">${escHtml(s)}</div>` : ''; };
+  // Render a report markdown → { html, model, date }, with tables wrapped + cites linked
+  const reportToHtml = (mdText) => {
+    const meta = parseMeta(mdText);
+    const d = renderMarkdown(meta.body);
     d.querySelectorAll('table.ov-table').forEach(tb => {
       const wrap = document.createElement('div'); wrap.className = 'ov-table-wrap';
       tb.parentNode.insertBefore(wrap, tb); wrap.appendChild(tb);
     });
-    return d.outerHTML;
+    linkCites(d);
+    return { html: d.outerHTML, model: meta.model, date: meta.date };
   };
 
-  let protocolHtml = '', recapHtml = '', transcriptHtml = '';
+  let protocol = null, recap = null, transcriptHtml = '';
   if (fileName.endsWith('.md')) {
-    // A standalone markdown file exports as a single document (no transcript)
-    protocolHtml = mdToHtml(mergedText);
+    protocol = reportToHtml(mergedText);
   } else {
     // Peel off any legacy summary preamble baked into the transcript file
     const kids = Array.from(el.children);
-    let bodyKids = kids, preambleHtml = '';
+    let bodyKids = kids, preamble = null;
     if (kids[0] && kids[0].classList.contains('ov-md')) {
       const md = kids[0];
       md.style.marginBottom = ''; md.style.paddingBottom = ''; md.style.borderBottom = '';
@@ -3119,36 +3146,52 @@ async function toHtml(txt, fileName, dirHandle = null, baseTxtName = null) {
         const wrap = document.createElement('div'); wrap.className = 'ov-table-wrap';
         tb.parentNode.insertBefore(wrap, tb); wrap.appendChild(tb);
       });
-      preambleHtml = md.outerHTML;
+      linkCites(md);
+      preamble = { html: md.outerHTML, model: '', date: '' };
       bodyKids = kids.slice(1);
     }
-    // Group consecutive rows from the same speaker (hide the repeated name/time)
+    // Corporate transcript bubbles: colour accent per speaker, name + time on one line
     let prevSpk = null;
     for (const k of bodyKids) {
       if (k.classList && k.classList.contains('ov-bubble')) {
         const spk = k.dataset.speaker || '';
         if (spk && spk === prevSpk) k.classList.add('cont');
         prevSpk = spk;
+        k.style.setProperty('--spk', speakerColor(spk));
+        // fold the timestamp into the speaker line, then drop the standalone one
+        const nameEl = k.querySelector('.b-speaker'), tsEl = k.querySelector('.b-ts');
+        if (nameEl && tsEl && !k.classList.contains('cont')) {
+          const time = document.createElement('span');
+          time.className = 'b-time'; time.textContent = tsEl.textContent;
+          nameEl.appendChild(document.createTextNode(' ')); nameEl.appendChild(time);
+        }
+        if (tsEl) tsEl.remove();
       } else prevSpk = null;
     }
     transcriptHtml = bodyKids.map(k => k.outerHTML).join('');
 
-    // Read the two generated report documents (if any)
     if (dirHandle) {
       const pMd = await readSessionFile(reportFileName(fileName, 'protocol'), dirHandle, true);
-      if (pMd && pMd.trim()) protocolHtml = mdToHtml(pMd);
+      if (pMd && pMd.trim()) protocol = reportToHtml(pMd);
       const rMd = await readSessionFile(reportFileName(fileName, 'recap'), dirHandle, true);
-      if (rMd && rMd.trim()) recapHtml = mdToHtml(rMd);
+      if (rMd && rMd.trim()) recap = reportToHtml(rMd);
     }
-    // Backward-compat: an old inline summary becomes the Minutes tab
-    if (!protocolHtml && preambleHtml) protocolHtml = preambleHtml;
+    if (!protocol && preamble) protocol = preamble;   // legacy inline summary → Minutes
   }
 
+  // Transcription engine (for the transcript tab caption)
+  const engineLabel = /_dg\.txt$/i.test(fileName) ? 'Deepgram'
+    : /_groq\.txt$/i.test(fileName) ? 'Groq'
+    : /_ai\.txt$/i.test(fileName) ? 'Gemini' : '';
+
   const tabs = [];
-  if (protocolHtml) tabs.push({ id: 'protocol', label: t('export_tab_protocol'), cls: 'tab-protocol', html: protocolHtml });
-  if (recapHtml)    tabs.push({ id: 'recap',    label: t('export_tab_recap'),    cls: 'tab-recap',    html: recapHtml });
+  if (protocol) tabs.push({ id: 'protocol', label: t('export_tab_protocol'), cls: 'tab-protocol',
+    html: captionHtml([protocol.model, fmtGen(protocol.date)]) + protocol.html });
+  if (recap) tabs.push({ id: 'recap', label: t('export_tab_recap'), cls: 'tab-recap',
+    html: captionHtml([recap.model, fmtGen(recap.date)]) + recap.html });
   if (transcriptHtml.trim())
-    tabs.push({ id: 'transcript', label: t('export_tab_transcript'), cls: 'tab-transcript', html: `<div class="ov-flow">${transcriptHtml}</div>` });
+    tabs.push({ id: 'transcript', label: t('export_tab_transcript'), cls: 'tab-transcript',
+      html: captionHtml([engineLabel]) + `<div class="ov-flow">${transcriptHtml}</div>` });
   if (!tabs.length)
     tabs.push({ id: 'transcript', label: t('export_tab_transcript'), cls: 'tab-transcript', html: `<p class="empty">${escHtml(t('export_empty_transcript'))}</p>` });
 
@@ -3235,21 +3278,42 @@ async function toHtml(txt, fileName, dirHandle = null, baseTxtName = null) {
   /* ── Body ── */
   .doc-body { padding: clamp(24px, 4vw, 38px) clamp(22px, 5vw, 60px) clamp(30px, 5vw, 48px); }
   .empty { color: var(--dim); font-size: 14px; }
-  /* ── Transcript as a document (no chat bubbles) ── */
+  .doc-cap { font-size: 11.5px; color: var(--dim); margin-bottom: 22px; font-variant-numeric: tabular-nums; }
+  /* ── Transcript: corporate chat bubbles with per-speaker colour ── */
   .ov-flow { display: block; }
   .ov-meta { color: var(--dim); font-size: 12.5px; margin: 6px 0; }
-  .tab-transcript .ov-bubble { display: block; margin: 0 0 18px; }
-  .tab-transcript .ov-bubble.cont { margin-top: -8px; }
-  .tab-transcript .b-avatar { display: none; }
-  .tab-transcript .b-body { display: flex; flex-direction: column; min-width: 0; }
-  .tab-transcript .b-speaker { order: 1; font-size: 13.5px; font-weight: 700; color: var(--tx) !important; margin: 0; }
-  .tab-transcript .b-ts { order: 2; font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; letter-spacing: .03em; margin: 2px 0 6px; }
-  .tab-transcript .ov-bubble.cont .b-speaker, .tab-transcript .ov-bubble.cont .b-ts { display: none; }
-  .tab-transcript .b-text {
-    order: 3; background: none !important; border: none !important; padding: 0 !important;
-    margin: 0; max-width: none !important; font-size: 14.5px; line-height: 1.7; color: var(--tx);
+  .ov-bubble { display: flex; gap: 11px; margin-top: 16px; }
+  .ov-bubble:first-child { margin-top: 0; }
+  .ov-bubble.cont { margin-top: 4px; }
+  .ov-bubble .b-avatar {
+    width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 700; color: #fff;
   }
-  .tab-transcript .ov-bubble.cont .b-text { margin-top: 9px; }
+  .ov-bubble.cont .b-avatar { visibility: hidden; }
+  .ov-bubble .b-body { flex: 1; min-width: 0; }
+  .ov-bubble .b-speaker { font-size: 13px; font-weight: 700; margin-bottom: 5px; }
+  .ov-bubble .b-time { font-weight: 500; color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .ov-bubble.cont .b-speaker { display: none; }
+  .ov-bubble .b-text {
+    background: var(--sur); border: 1px solid var(--bd); border-left: 3px solid var(--spk, var(--acc));
+    border-radius: 4px 10px 10px 10px; padding: 9px 13px;
+    font-size: 14.5px; line-height: 1.6; word-break: break-word;
+  }
+  .ov-bubble.flash .b-text { animation: cite-flash 1.9s ease; }
+  @keyframes cite-flash { 0%, 25% { background: var(--acc-soft); } 100% { background: var(--sur); } }
+  /* ── Citations (report → transcript) ── */
+  .cite {
+    color: var(--acc); font-variant-numeric: tabular-nums; text-decoration: none;
+    border-bottom: 1px dashed rgba(47,74,124,.45); cursor: pointer; white-space: nowrap; font-size: .9em; padding: 0 1px;
+  }
+  .cite:hover { background: var(--acc-soft); }
+  .cite-tip {
+    position: fixed; z-index: 30; max-width: 340px; background: #1a1f2b; color: #fff;
+    font-size: 12.5px; line-height: 1.5; padding: 9px 12px; border-radius: 8px;
+    box-shadow: 0 8px 28px rgba(0,0,0,.24); pointer-events: none; opacity: 0; transition: opacity .12s;
+  }
+  .cite-tip .tip-spk { display: block; font-weight: 700; font-size: 10.5px; color: #b9c4dc; margin-bottom: 3px; text-transform: uppercase; letter-spacing: .05em; }
   /* ── Screenshot figures (inside transcript) ── */
   .ov-screenshot {
     display: flex; gap: 18px; align-items: flex-start;
@@ -3355,14 +3419,49 @@ document.querySelectorAll('.ov-scr-toggle').forEach(function(btn) {
     btn.textContent = open ? C : E;
   });
 });
+function showTab(id) {
+  document.querySelectorAll('.tab').forEach(function(b) { b.classList.toggle('active', b.getAttribute('data-tab') === id); });
+  document.querySelectorAll('.tab-panel').forEach(function(p) { p.classList.toggle('active', p.getAttribute('data-panel') === id); });
+}
 document.querySelectorAll('.tab').forEach(function(btn) {
-  btn.addEventListener('click', function() {
-    var id = btn.getAttribute('data-tab');
-    document.querySelectorAll('.tab').forEach(function(b) { b.classList.toggle('active', b === btn); });
-    document.querySelectorAll('.tab-panel').forEach(function(p) { p.classList.toggle('active', p.getAttribute('data-panel') === id); });
-    window.scrollTo({ top: 0 });
-  });
+  btn.addEventListener('click', function() { showTab(btn.getAttribute('data-tab')); window.scrollTo({ top: 0 }); });
 });
+// Citations: index the transcript, show a quote on hover, jump to it on click
+var CITE = [].slice.call(document.querySelectorAll('.tab-transcript .ov-bubble')).map(function(b) {
+  return { sec: +(b.getAttribute('data-ts-sec') || 0), el: b,
+    spk: (b.querySelector('.b-speaker') ? b.querySelector('.b-speaker').textContent : '').trim(),
+    txt: (b.querySelector('.b-text') ? b.querySelector('.b-text').textContent : '').trim() };
+});
+function nearestBubble(sec) {
+  var best = null;
+  for (var i = 0; i < CITE.length; i++) { if (CITE[i].sec <= sec + 2) best = CITE[i]; else break; }
+  return best || CITE[0] || null;
+}
+if (CITE.length) {
+  var tip = document.createElement('div'); tip.className = 'cite-tip'; document.body.appendChild(tip);
+  document.querySelectorAll('.cite').forEach(function(a) {
+    a.addEventListener('mouseenter', function() {
+      var b = nearestBubble(+a.dataset.ts); if (!b || !b.txt) return;
+      tip.innerHTML = '<span class="tip-spk"></span>';
+      tip.firstChild.textContent = b.spk;
+      tip.appendChild(document.createTextNode(b.txt.slice(0, 240) + (b.txt.length > 240 ? '…' : '')));
+      var r = a.getBoundingClientRect();
+      tip.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 356)) + 'px';
+      tip.style.top = (r.bottom + 8) + 'px';
+      tip.style.opacity = '1';
+    });
+    a.addEventListener('mouseleave', function() { tip.style.opacity = '0'; });
+    a.addEventListener('click', function(e) {
+      e.preventDefault();
+      var b = nearestBubble(+a.dataset.ts); if (!b) return;
+      showTab('transcript'); tip.style.opacity = '0';
+      setTimeout(function() {
+        b.el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        b.el.classList.add('flash'); setTimeout(function() { b.el.classList.remove('flash'); }, 1900);
+      }, 60);
+    });
+  });
+}
 <\/script>
 </body>
 </html>`;
@@ -7246,21 +7345,29 @@ async function deleteSessionFiles(dirName) {
 // transcript by its own built-in prompt. The HTML export shows them as tabs.
 // AI prompts stay in Russian (see CLAUDE.md — the user wants Russian output).
 const PROMPT_PROTOCOL =
-`Ты составляешь официальный протокол рабочей встречи на основе транскрипции. Пиши деловым, нейтральным языком. Опирайся только на факты из транскрипции, ничего не выдумывай.
+`Ты составляешь официальный протокол рабочей встречи по транскрипции. Пиши деловым, нейтральным языком строго по фактам из транскрипции — ничего не додумывай.
 
-Верни Markdown строго по структуре:
+КРИТИЧЕСКИ ВАЖНО про решения:
+- В раздел «Решения» включай ТОЛЬКО то, что участники действительно приняли и согласовали.
+- Предложение, которое обсуждали, но отклонили, не поддержали или отложили — это НЕ решение. Никогда не записывай отклонённое или спорное предложение как принятое решение.
+- Если по вопросу не пришли к согласию — помести его в «Открытые вопросы», а не в «Решения».
+- Если явных принятых решений не было — так и напиши: «Явных решений не зафиксировано».
+
+Каждый пункт в разделах «Решения» и «Открытые вопросы» помечай меткой времени того момента из транскрипции, к которому он относится, в квадратных скобках в формате [ЧЧ:ММ:СС]. Бери реальную метку из соответствующей строки транскрипции и ставь её в конце пункта.
+
+Верни Markdown строго по структуре (раздел без содержания — пропускай):
 
 ## Повестка
 Короткий список обсуждавшихся тем.
 
 ## Решения
-Маркированный список принятых решений. Если решений не было — напиши «Явных решений не зафиксировано».
+Маркированный список ТОЛЬКО принятых решений, каждое с меткой [ЧЧ:ММ:СС] в конце.
 
 ## Задачи
-Таблица: | Задача | Ответственный | Срок |. Если срок или ответственный не назван — поставь «—». Если задач нет — пропусти раздел.
+Таблица: | Задача | Ответственный | Срок |. Если срок или ответственный не назван — поставь «—».
 
 ## Открытые вопросы
-Список нерешённых вопросов. Если их нет — пропусти раздел.
+Вопросы без согласия, а также отклонённые и отложенные предложения — каждый с меткой [ЧЧ:ММ:СС].
 
 Не добавляй вступлений, пояснений и приветствий — только протокол.
 
@@ -7268,7 +7375,9 @@ const PROMPT_PROTOCOL =
 {{transcript}}`;
 
 const PROMPT_RECAP =
-`Ты пишешь связный пересказ рабочей встречи для коллеги, который на ней не был. Плавный повествовательный текст в 3–6 абзацах: о чём говорили, к чему пришли, какова была логика обсуждения. Без списков и таблиц, без канцелярита — живой, но деловой язык. Опирайся только на транскрипцию, ничего не додумывай.
+`Ты пишешь связный пересказ рабочей встречи для коллеги, которого на ней не было. Плавный текст в 3–6 абзацах: о чём говорили, какие были позиции, к чему в итоге пришли и что осталось нерешённым. Точно различай принятое и отклонённое — не выдавай обсуждавшиеся или отклонённые идеи за принятые решения. Без списков и таблиц, живой, но деловой язык. Только по транскрипции, ничего не додумывай.
+
+Ключевые моменты помечай меткой времени из транскрипции в формате [ЧЧ:ММ:СС] — ставь её сразу после соответствующего утверждения.
 
 Начни сразу с пересказа, без заголовков и вступлений.
 
@@ -7309,9 +7418,12 @@ async function generateReport(kind, transcriptFile, dirHandle, model) {
     const d = await callWithModelOption(model, { contents: [{ parts: [{ text: finalPrompt }] }] });
     const md = stripCodeFence(d.candidates?.[0]?.content?.parts?.[0]?.text ?? '');
     if (!md) throw new Error(t('error_summary_empty'));
+    // Record which model actually produced this document (shown in the export)
+    const modelLabel = model.label || (model.provider === 'gemini' ? model.model : `${model.provider} / ${model.model}`);
+    const meta = `<!-- meetscribe:report model="${modelLabel.replace(/"/g,'')}" date="${new Date().toISOString()}" -->\n`;
     const fh = await dirHandle.getFileHandle(reportFileName(transcriptFile, kind), { create: true });
     const w = await fh.createWritable();
-    await w.write(md.trim() + '\n');
+    await w.write(meta + md.trim() + '\n');
     await w.close();
     removeToast(spinToast);
     autoToast(`<div class="toast-title">${t('report_done')}</div><div style="font-size:12px;color:var(--dim)">${escHtml(kindLabel)}</div>`, 3500);
