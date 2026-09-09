@@ -381,6 +381,14 @@ const LANG = {
     report_generating: 'Generating: {kind}',
     report_done: 'Report ready',
     report_none: 'Nothing to generate — pick a document.',
+    spk_btn_title: 'Rename speakers',
+    spk_edit_title: '👤 Speakers',
+    spk_edit_hint: 'Fix names — changes apply to the transcript and both reports.',
+    spk_save: 'Apply',
+    spk_cancel: 'Cancel',
+    spk_saving: 'Renaming…',
+    spk_done: 'Speakers renamed',
+    spk_none: 'No speaker labels found in this transcript.',
 
     // ── Live engine hints ────────────────────────────────────────────────
     engine_hint_gemini: 'Key from <a href="https://aistudio.google.com/apikey" target="_blank" style="color:var(--accent2)">Google AI Studio</a> — transcription via Gemini Live API.',
@@ -825,6 +833,14 @@ const LANG = {
     report_generating: 'Генерирую: {kind}',
     report_done: 'Отчёт готов',
     report_none: 'Нечего генерировать — выбери документ.',
+    spk_btn_title: 'Переименовать спикеров',
+    spk_edit_title: '👤 Спикеры',
+    spk_edit_hint: 'Исправь имена — применится к транскрипту и обоим отчётам.',
+    spk_save: 'Применить',
+    spk_cancel: 'Отмена',
+    spk_saving: 'Переименовываю…',
+    spk_done: 'Спикеры переименованы',
+    spk_none: 'В этом транскрипте не нашлось имён спикеров.',
 
     // ── Live engine hints ────────────────────────────────────────────────
     engine_hint_gemini: 'Ключ от <a href="https://aistudio.google.com/apikey" target="_blank" style="color:var(--accent2)">Google AI Studio</a> — транскрипция через Gemini Live API.',

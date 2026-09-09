@@ -3094,8 +3094,10 @@ async function toHtml(txt, fileName, dirHandle = null, baseTxtName = null) {
   const screenCount = (mergedText.match(/\[SCREENSHOT: /g) || []).length;
 
   // ── Build tab content: Minutes (protocol) · Recap · Transcript ───────────
-  const TS_RE = /\[(\d{1,2}):(\d{2}):(\d{2})\]/g;
-  // Turn [HH:MM:SS] citations inside a report into clickable anchors → transcript
+  // Match any HH:MM:SS token (not just [HH:MM:SS]) so comma-lists like
+  // "[00:08:26, 00:24:47]" get every timestamp linked, brackets kept as text.
+  const TS_RE = /(\d{1,2}):([0-5]\d):([0-5]\d)/g;
+  // Turn timestamp citations inside a report into clickable anchors → transcript
   const linkCites = (root) => {
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     const targets = [];
@@ -6969,6 +6971,81 @@ async function buildPipelineBar(mergedText, fileName, dirHandle, baseTxtName, on
   return bar;
 }
 
+// Distinct speaker labels (in order of appearance) from a transcript
+function getSpeakerLabels(text) {
+  const out = [];
+  for (const m of (text || '').matchAll(/^\[\d+:\d+:\d+\]\s*([^:\n]+):/gm)) {
+    const s = m[1].trim();
+    if (s && !out.includes(s)) out.push(s);
+  }
+  return out;
+}
+
+// Rename speakers everywhere: transcript labels + name mentions in the transcript
+// and in both report documents. Whole-word (letter-bounded, Cyrillic-aware).
+async function applySpeakerRenames(mapping, fileName, dirHandle, baseTxtName) {
+  const changes = mapping.filter(x => x.to && x.to !== x.from);
+  if (!changes.length) return false;
+  const L = 'A-Za-zА-Яа-яЁё0-9_';
+  const files = new Set([fileName]);
+  if (baseTxtName) files.add(baseTxtName);
+  files.add(reportFileName(fileName, 'protocol'));
+  files.add(reportFileName(fileName, 'recap'));
+  let any = false;
+  for (const f of files) {
+    const content = await readSessionFile(f, dirHandle, true);
+    if (content == null) continue;
+    let updated = content;
+    for (const { from, to } of changes) {
+      updated = updated.replace(new RegExp('(?<![' + L + '])' + escRegex(from) + '(?![' + L + '])', 'g'), to);
+    }
+    if (updated !== content) {
+      try {
+        const fh = await dirHandle.getFileHandle(f, { create: false });
+        const w = await fh.createWritable();
+        await w.write(updated);
+        await w.close();
+        any = true;
+      } catch (e) { console.error('speaker rename write', f, e); }
+    }
+  }
+  return any;
+}
+
+// Small dialog: list distinct speakers, edit each, apply across the session
+function showSpeakerEditor(fileName, dirHandle, baseTxtName, onDone) {
+  (async () => {
+    let src = await readSessionFile(fileName, dirHandle, true);
+    let labels = getSpeakerLabels(src);
+    if (!labels.length && baseTxtName) {
+      const b = await readSessionFile(baseTxtName, dirHandle, true);
+      if (b) labels = getSpeakerLabels(b);
+    }
+    if (!labels.length) { autoToast(`<div class="toast-title">${t('spk_none')}</div>`, 3000); return; }
+    const rows = labels.map(l => `<div style="display:flex;gap:8px;align-items:center;margin:5px 0">
+        <span style="width:96px;flex-shrink:0;color:var(--dim);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(l)}">${escHtml(l)}</span>
+        <span style="color:var(--dim)">→</span>
+        <input class="spk-in" data-from="${escHtml(l)}" value="${escHtml(l)}" style="flex:1;min-width:0;padding:5px 8px">
+      </div>`).join('');
+    const toast = makeToast(`
+      <div class="toast-title">${t('spk_edit_title')}</div>
+      <div style="font-size:12px;color:var(--dim);margin:2px 0 8px">${t('spk_edit_hint')}</div>
+      ${rows}
+      <div class="toast-btns"><button id="spk-cancel" class="ghost">${t('spk_cancel')}</button><button id="spk-save">${t('spk_save')}</button></div>`);
+    toast.querySelector('#spk-cancel').onclick = () => removeToast(toast);
+    toast.querySelector('#spk-save').onclick = async () => {
+      const mapping = [...toast.querySelectorAll('.spk-in')].map(inp => ({ from: inp.dataset.from, to: inp.value.trim() }));
+      removeToast(toast);
+      if (!mapping.some(x => x.to && x.to !== x.from)) return;
+      const spin = makeToast(`<div class="toast-title"><span class="spinner"></span> ${t('spk_saving')}</div>`);
+      try { await applySpeakerRenames(mapping, fileName, dirHandle, baseTxtName); }
+      finally { removeToast(spin); }
+      autoToast(`<div class="toast-title">${t('spk_done')}</div>`, 3000);
+      onDone && onDone();
+    };
+  })();
+}
+
 async function openFileOverlay(fileName, dirHandle = S.dirHandle, baseTxtName = null) {
   const text = await readSessionFile(fileName, dirHandle);
   if (text === null) return;
@@ -7008,6 +7085,7 @@ async function openFileOverlay(fileName, dirHandle = S.dirHandle, baseTxtName = 
         <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1">${escHtml(fileName)}</span>
         <div style="display:flex;gap:2px;align-items:center;flex-shrink:0;margin-left:8px">
           <button class="ghost ov-search-btn" style="font-size:13px;padding:2px 7px;line-height:1.4" title="Find [Ctrl+F]">🔍</button>
+          <button class="ghost ov-spk-btn" style="font-size:13px;padding:2px 7px;line-height:1.4" title="${escHtml(t('spk_btn_title'))}">👤</button>
           <button class="ghost ov-edit-btn" style="font-size:13px;padding:2px 7px;line-height:1.4" title="Edit transcript">✏️</button>
           <button id="ov-focus" class="ghost" style="font-size:14px;padding:2px 7px;line-height:1" title="Режим фокуса">⤢</button>
           <button id="ov-close" style="font-size:15px;padding:2px 8px;line-height:1">✕</button>
@@ -7023,13 +7101,20 @@ async function openFileOverlay(fileName, dirHandle = S.dirHandle, baseTxtName = 
   };
   ov.addEventListener('click', e => { if (e.target === ov) closeOverlay(ov); });
 
-  // ── Hide find/edit buttons only for .md files ────────────────────────
+  // ── Hide find/edit/speaker buttons only for .md files ────────────────
   if (fileName.endsWith('.md')) {
     ov.querySelector('.ov-search-btn').style.display = 'none';
+    ov.querySelector('.ov-spk-btn').style.display = 'none';
     ov.querySelector('.ov-edit-btn').style.display = 'none';
     document.body.appendChild(ov);
     return;
   }
+  // Rename speakers → rewrites transcript + reports, then re-opens the view
+  ov.querySelector('.ov-spk-btn').onclick = () => showSpeakerEditor(fileName, dirHandle, baseTxtName, () => {
+    closeOverlay(ov);
+    openFileOverlay(fileName, dirHandle, baseTxtName);
+    renderSessions(($('sessions-search')?.value || '').trim(), false);
+  });
   // ─── FIND BAR ────────────────────────────────────────────────────────
   const findBar = document.createElement('div');
   findBar.className = 'ov-find-bar';
