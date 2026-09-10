@@ -389,6 +389,8 @@ const LANG = {
     spk_saving: 'Renaming…',
     spk_done: 'Speakers renamed',
     spk_none: 'No speaker labels found in this transcript.',
+    ov_view_edit: 'Edit',
+    ov_view_doc: 'Document',
 
     // ── Live engine hints ────────────────────────────────────────────────
     engine_hint_gemini: 'Key from <a href="https://aistudio.google.com/apikey" target="_blank" style="color:var(--accent2)">Google AI Studio</a> — transcription via Gemini Live API.',
@@ -841,6 +843,8 @@ const LANG = {
     spk_saving: 'Переименовываю…',
     spk_done: 'Спикеры переименованы',
     spk_none: 'В этом транскрипте не нашлось имён спикеров.',
+    ov_view_edit: 'Править',
+    ov_view_doc: 'Документ',
 
     // ── Live engine hints ────────────────────────────────────────────────
     engine_hint_gemini: 'Ключ от <a href="https://aistudio.google.com/apikey" target="_blank" style="color:var(--accent2)">Google AI Studio</a> — транскрипция через Gemini Live API.',

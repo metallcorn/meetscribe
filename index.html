@@ -7073,34 +7073,7 @@ async function openFileOverlay(fileName, dirHandle = S.dirHandle, baseTxtName = 
     await refreshPipeline();
     body.appendChild(plHolder);
 
-    // Report documents (same files the HTML export uses) — keep preview and
-    // download in sync: open them here instead of a stale inline summary.
-    const reports = [];
-    for (const kind of ['protocol', 'recap']) {
-      const rf = reportFileName(fileName, kind);
-      const rc = await readSessionFile(rf, dirHandle, true);
-      if (rc && rc.trim()) reports.push({ kind, file: rf, label: t(kind === 'protocol' ? 'export_tab_protocol' : 'export_tab_recap') });
-    }
-    if (reports.length) {
-      const links = document.createElement('div');
-      links.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;margin:0 0 14px';
-      reports.forEach(r => {
-        const b = document.createElement('button');
-        b.className = 'ghost'; b.style.cssText = 'font-size:12px;padding:5px 12px';
-        b.textContent = (r.kind === 'protocol' ? '📋 ' : '📝 ') + r.label;
-        b.onclick = () => openFileOverlay(r.file, dirHandle);
-        links.appendChild(b);
-      });
-      body.appendChild(links);
-    }
-
     const txDiv = renderTranscriptTxt(mergedText, dirHandle);
-    // When new report docs exist, drop the stale inline summary preamble so the
-    // transcript preview shows the transcript, not an out-of-date summary.
-    if (reports.length) {
-      const pre = txDiv.querySelector('.ov-md');
-      if (pre && pre === txDiv.firstElementChild) pre.remove();
-    }
     // Mark screenshot cards that came from base file (not editable in AI file save)
     if (baseTxtName && baseTxtName !== fileName) {
       txDiv.querySelectorAll('.ov-screenshot').forEach(el => { el.dataset.fromBase = '1'; });
@@ -7112,6 +7085,7 @@ async function openFileOverlay(fileName, dirHandle = S.dirHandle, baseTxtName = 
       <div class="overlay-hdr">
         <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1">${escHtml(fileName)}</span>
         <div style="display:flex;gap:2px;align-items:center;flex-shrink:0;margin-left:8px">
+          <button class="ghost ov-view-btn" style="font-size:13px;padding:2px 9px;line-height:1.4">✏️</button>
           <button class="ghost ov-search-btn" style="font-size:13px;padding:2px 7px;line-height:1.4" title="Find [Ctrl+F]">🔍</button>
           <button class="ghost ov-spk-btn" style="font-size:13px;padding:2px 7px;line-height:1.4" title="${escHtml(t('spk_btn_title'))}">👤</button>
           <button class="ghost ov-edit-btn" style="font-size:13px;padding:2px 7px;line-height:1.4" title="Edit transcript">✏️</button>
@@ -7129,8 +7103,9 @@ async function openFileOverlay(fileName, dirHandle = S.dirHandle, baseTxtName = 
   };
   ov.addEventListener('click', e => { if (e.target === ov) closeOverlay(ov); });
 
-  // ── Hide find/edit/speaker buttons only for .md files ────────────────
+  // ── Hide view/find/edit/speaker buttons only for .md files ───────────
   if (fileName.endsWith('.md')) {
+    ov.querySelector('.ov-view-btn').style.display = 'none';
     ov.querySelector('.ov-search-btn').style.display = 'none';
     ov.querySelector('.ov-spk-btn').style.display = 'none';
     ov.querySelector('.ov-edit-btn').style.display = 'none';
@@ -7441,9 +7416,38 @@ async function openFileOverlay(fileName, dirHandle = S.dirHandle, baseTxtName = 
 
   // Ctrl+F hotkey inside overlay
   ov.addEventListener('keydown', e => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'f') { e.preventDefault(); e.stopPropagation(); openFindBar(); }
+    if ((e.ctrlKey || e.metaKey) && e.key === 'f') { e.preventDefault(); e.stopPropagation(); if (docMode) applyViewMode(false); openFindBar(); }
     if (e.key === 'Escape' && findBar.style.display !== 'none') { e.stopPropagation(); closeFindBar(); }
   });
+
+  // ── Document view: the exact HTML export in an iframe (reuses toHtml, so the
+  // preview looks identical to the download). Default view; the editor
+  // (find / timeline / inline edit) lives behind the ✏️ toggle. ──
+  const docFrame = document.createElement('iframe');
+  docFrame.style.cssText = 'flex:1;width:100%;border:0;min-height:0;background:#eceef2';
+  inner.appendChild(docFrame);
+  toHtml(text, fileName, dirHandle, baseTxtName).then(html => { docFrame.srcdoc = html; }).catch(e => console.error('doc view', e));
+
+  const viewBtn = ov.querySelector('.ov-view-btn');
+  const searchBtn = ov.querySelector('.ov-search-btn');
+  const editBtn = ov.querySelector('.ov-edit-btn');
+  let docMode = true;
+  function applyViewMode(doc) {
+    docMode = doc;
+    if (doc && editMode) exitEditMode(false);
+    if (doc) closeFindBar();
+    // Give the flex column a definite height in doc mode so the iframe fills it
+    inner.style.height = doc ? '82vh' : '';
+    docFrame.hidden = !doc;
+    body.hidden = doc;
+    if (tl) tl.style.display = (doc || !bubbles.length) ? 'none' : '';
+    searchBtn.style.display = doc ? 'none' : '';
+    editBtn.style.display = (doc || !bubbles.length) ? 'none' : '';
+    viewBtn.textContent = doc ? '✏️' : '📄';
+    viewBtn.title = doc ? t('ov_view_edit') : t('ov_view_doc');
+  }
+  viewBtn.onclick = () => applyViewMode(!docMode);
+  applyViewMode(true);
 
   document.body.appendChild(ov);
 }
