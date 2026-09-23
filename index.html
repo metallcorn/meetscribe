@@ -6987,6 +6987,13 @@ async function applySpeakerRenames(mapping, fileName, dirHandle, baseTxtName) {
   const changes = mapping.filter(x => x.to && x.to !== x.from);
   if (!changes.length) return false;
   const L = 'A-Za-zА-Яа-яЁё0-9_';
+  // Single-pass replacement: build ONE regex over all old names and map each
+  // match to its new name. Doing it in separate passes would cascade — a name
+  // written by one rule gets re-matched by the next, collapsing speakers.
+  const map = new Map(changes.map(c => [c.from, c.to]));
+  const alt = changes.map(c => c.from).sort((a, b) => b.length - a.length).map(escRegex).join('|');
+  const re = new RegExp('(?<![' + L + '])(' + alt + ')(?![' + L + '])', 'g');
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const files = new Set([fileName]);
   if (baseTxtName) files.add(baseTxtName);
   files.add(reportFileName(fileName, 'protocol'));
@@ -6995,19 +7002,16 @@ async function applySpeakerRenames(mapping, fileName, dirHandle, baseTxtName) {
   for (const f of files) {
     const content = await readSessionFile(f, dirHandle, true);
     if (content == null) continue;
-    let updated = content;
-    for (const { from, to } of changes) {
-      updated = updated.replace(new RegExp('(?<![' + L + '])' + escRegex(from) + '(?![' + L + '])', 'g'), to);
-    }
-    if (updated !== content) {
-      try {
-        const fh = await dirHandle.getFileHandle(f, { create: false });
-        const w = await fh.createWritable();
-        await w.write(updated);
-        await w.close();
-        any = true;
-      } catch (e) { console.error('speaker rename write', f, e); }
-    }
+    const updated = content.replace(re, m => map.get(m) ?? m);
+    if (updated === content) continue;
+    try {
+      // Safety copy so a bad rename is always recoverable
+      const bh = await dirHandle.getFileHandle(`${f}.${stamp}.bak`, { create: true });
+      const bw = await bh.createWritable(); await bw.write(content); await bw.close();
+      const fh = await dirHandle.getFileHandle(f, { create: false });
+      const w = await fh.createWritable(); await w.write(updated); await w.close();
+      any = true;
+    } catch (e) { console.error('speaker rename write', f, e); }
   }
   return any;
 }
